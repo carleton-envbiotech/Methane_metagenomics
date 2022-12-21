@@ -1,0 +1,964 @@
+---
+title: "Methanoperedenacaea phylogeny"
+Date: '2022-12-09'
+output:
+  html_notebook:
+    theme: united
+    toc: yes
+  html_document:
+    toc: yes
+    df_print: paged
+---
+
+# Workflow
+1. Use GToTree to create a rooted tree for Methanoperedenacaeae genomes with an outgroup
+2. Visualize phylogenetic trees in R
+3. Run the Methanoperedenaceae genomes available from GTDB through the DRAM workflow
+4. Reproduce the heatmaps from DRAM in R
+
+# Software and package versions
+- Ran the sessionInfo() command on 2022-12-19 following Rstudio and R package updates
+
+R version 4.1.2 (2021-11-01)
+Platform: x86_64-apple-darwin17.0 (64-bit)
+Running under: macOS Monterey 12.3.1
+
+Matrix products: default
+LAPACK: /Library/Frameworks/R.framework/Versions/4.1/Resources/lib/libRlapack.dylib
+
+locale:
+[1] en_CA.UTF-8/en_CA.UTF-8/en_CA.UTF-8/C/en_CA.UTF-8/en_CA.UTF-8
+
+attached base packages:
+[1] stats     graphics  grDevices utils     datasets  methods   base     
+
+other attached packages:
+ [1] ggtree_3.0.4       tidytree_0.4.1     treeio_1.16.2      ggtext_0.1.2       patchwork_1.1.2    RColorBrewer_1.1-3 data.table_1.14.6  forcats_0.5.2     
+ [9] stringr_1.5.0      dplyr_1.0.10       purrr_0.3.5        readr_2.1.3        tidyr_1.2.1        tibble_3.1.8       ggplot2_3.4.0      tidyverse_1.3.2   
+
+loaded via a namespace (and not attached):
+ [1] nlme_3.1-160        fs_1.5.2            lubridate_1.9.0     httr_1.4.4          tools_4.1.2         backports_1.4.1     bslib_0.4.1        
+ [8] utf8_1.2.2          R6_2.5.1            DBI_1.1.3           lazyeval_0.2.2      colorspace_2.0-3    withr_2.5.0         tidyselect_1.2.0   
+[15] compiler_4.1.2      textshaping_0.3.6   cli_3.4.1           rvest_1.0.3         xml2_1.3.3          labeling_0.4.2      sass_0.4.4         
+[22] scales_1.2.1        commonmark_1.8.1    systemfonts_1.0.4   digest_0.6.30       yulab.utils_0.0.5   rmarkdown_2.18      pkgconfig_2.0.3    
+[29] htmltools_0.5.4     dbplyr_2.2.1        fastmap_1.1.0       rlang_1.0.6         readxl_1.4.1        rstudioapi_0.14     gridGraphics_0.5-1 
+[36] jquerylib_0.1.4     farver_2.1.1        generics_0.1.3      jsonlite_1.8.4      googlesheets4_1.0.1 magrittr_2.0.3      ggplotify_0.1.0    
+[43] Rcpp_1.0.9          munsell_0.5.0       fansi_1.0.3         ape_5.6-2           lifecycle_1.0.3     stringi_1.7.8       yaml_2.3.6         
+[50] grid_4.1.2          parallel_4.1.2      crayon_1.5.2        lattice_0.20-45     haven_2.5.1         gridtext_0.1.5      hms_1.1.2          
+[57] knitr_1.41          pillar_1.8.1        markdown_1.4        reprex_2.0.2        glue_1.6.2          evaluate_0.18       ggfun_0.0.9        
+[64] modelr_0.1.10       vctrs_0.5.1         tzdb_0.3.0          cellranger_1.1.0    gtable_0.3.1        assertthat_0.2.1    cachem_1.0.6       
+[71] xfun_0.35           broom_1.0.1         ragg_1.2.4          googledrive_2.0.0   gargle_1.2.1        aplot_0.1.9         timechange_0.1.1   
+[78] ellipsis_0.3.2  
+
+Additional packages employed in terminal:
+- GToTree v1.5.38 
+- bit v1.8.53
+- DRAM v1.2
+
+# 1. Use GToTree to create a rooted tree for Methanoperedenacaeae genomes with an outgroup
+1. Activate GtoTree and create a dedicated directory to house all the files you'll need for the tree. Copy any assemblies over you'd like to this directory and put them in a list in a .txt format to call when running GToTree.
+```{bash}
+source activate gtotree
+mkdir ~/name/directory
+
+cp ~/Example_MAG.fasta ~/name/directory
+
+ls *fasta > Methanoperedenaceae_revised_curated_assembly_fasta_files.txt
+```
+
+2. Retrieve all the GTDB accession numbers for your family of interest and include others within the order to create an outgroup.
+```{bash}
+gtt-get-accessions-from-GTDB -t Methanosarcinaceae --GTDB-representatives-only
+gtt-get-accessions-from-GTDB -t ANME-2c --GTDB-representatives-only
+gtt-get-accessions-from-GTDB -t Methanoperedenaceae --GTDB-representatives-only
+```
+At the time of running this analysis, the following number of genomes were available in GTDB r202:
+- Methanosarcinaceae = 66 genomes
+- ANME-2c = 8 genomes
+- Methanoperedenaceae = 14 genomes
+
+3. Append all of these files to each other and rename the file. 
+```{bash}
+cat GTDB-ANME-2c-family-GTDB-rep-accs.txt >> GTDB-Methanosarcinaceae-family-GTDB-rep-accs.txt
+cat GTDB-Methanoperedenaceae-family-GTDB-rep-accs.txt >> GTDB-Methanosarcinaceae-family-GTDB-rep-accs.txt
+mv GTDB-Methanosarcinaceae-family-GTDB-rep-accs.txt GTDB-Methanosarcinaceae-ANME-2c-Methanoperedenaceae-family-GTDB-rep-accs.txt
+```
+
+4. Run the GToTree script on all of the input genome. In this case, we will call the MAGs of interest using the -f flag which calls from a list of .fasta file, whereas we will input the genomes retrievd from GTDB using the -a flag, which works from a collated listed of accession numbers.
+```{bash}
+ls *fasta > Methanoperedenaceae_revised_curated_assembly_fasta_files.txt
+
+GToTree -f Methanoperedenaceae_revised_curated_assembly_fasta_files.txt\
+        -a GTDB-Methanosarcinaceae-ANME-2c-Methanoperedenaceae-family-GTDB-rep-accs.txt \
+        -L Family,Genus,Species \
+        -H Archaea -D -j 4 \
+        -o Methanoperedenaceae_rooted_tree_revised_curated_assemblies
+```
+
+**Note**: From here, you can export the files to your personal machine to work with them in R to create visualizations. 
+
+# 2. Visualize phylogenetic trees in R
+1. Install 'ggtree' using the bioconductor pacakage if you have not already.
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("ggtree")
+```
+
+2. Read the .tre file containing a phylogentic tree in a newick format using the 'treeio' package that will be installed using the command from step 1.
+```{r}
+library(treeio)
+Methanoperedenaceae_tree<-read.newick("Methanoperedenaceae_rooted_tree_revised_curated_assemblies.tre")
+```
+
+3. Convert the tree to a data object that can be examined in R. Manually edit the 'label' variable to provide more informative labels for the genomes of interest. You do not need to do this for all of the genomes included because the tree nodes will be collapsed in subsequent steps.
+```{r}
+library(tidytree)
+library(tidyverse)
+Methanoperedenaceae_tree_file_data<- Methanoperedenaceae_tree %>% as.treedata %>% as_tibble
+
+Methanoperedenaceae_tree_relabel<- Methanoperedenaceae_tree_file_data %>%
+mutate(label = recode( #manually recode the labels here making sure to preserve original label output by GToTree
+       label,
+"GCA_013331375.1_Methanoperedenaceae_UBA10536_UBA10536_sp10536u" =  "UBA10536 sp10536u (GCA_013331375.1)",
+"GCA_002839545.1_Methanoperedenaceae_Methanoperedens_A_Methanoperedens_A_sp002839545" = "Methanoperedens A sp002839545 (GCA_002839545.1)",
+"GCA_902386255.1_Methanoperedenaceae_Methanoperedens_Methanoperedens_sp902386255" = "Methanoperedens sp902386255 (GCA_902386255.1)",
+"GCA_003104905.1_Methanoperedenaceae_Methanoperedens_Methanoperedens_sp003104905" = "Methanoperedens sp003104905 (GCA_003104905.1)",
+"GCA_012026795.1_Methanoperedenaceae_Methanoperedens_Methanoperedens_sp012026795" = "Methanoperedens sp012026795 (GCA_012026795.1)",
+"GCF_002487355.1_Methanoperedenaceae_Methanoperedens_Methanoperedens_sp002487355" = "Methanoperedens sp002487355 (GCF_002487355.1)",
+"GCA_902384525.1_Methanoperedenaceae_Methanoperedens_Methanoperedens_sp902384525" = "Methanoperedens sp902384525 (GCA_902384525.1)",
+"GCA_012026835.1_Methanoperedenaceae_Methanoperedens_Methanoperedens_sp012026835" = "Methanoperedens sp012026835 (GCA_012026835.1)",
+"GCA_902386205.1_Methanoperedenaceae_Methanoperedens_Methanoperedens_sp902386205" = "Methanoperedens sp902386205 (GCA_902386205.1)",
+"GCA_902386115.1_Methanoperedenaceae_Methanoperedens_Methanoperedens_sp902386115" = "Methanoperedens sp902386115 (GCA_902386115.1)",
+"GCF_900196725.1_Methanoperedenaceae_Methanoperedens_Methanoperedens_nitroreducens_A" = "Methanoperedens nitroreducens A (GCF_900196725.1)",
+"GCA_902386135.1_Methanoperedenaceae_Methanoperedens_Methanoperedens_sp902386135" = "Methanoperedens sp902386135 (GCA_902386135.1)",
+"GCF_000685155.1_Methanoperedenaceae_Methanoperedens_Methanoperedens_nitroreducens" = "Methanoperedens nitroreducens (GCF_000685155.1)",
+"GCA_902386085.1_Methanoperedenaceae_Methanoperedens_Methanoperedens_sp902386085" = "Methanoperedens sp902386085 (GCA_902386085.1)",
+"STD1_6_scaffolds_2500" = "Methanoperedens sp. (MAG STD1_6)",
+"STD1_19_scaffolds_2500" = "Methanoperedens sp. (MAG STD1_19)"
+)) 
+
+
+Methanoperedenaceae_tree<-as.phylo(Methanoperedenaceae_tree_relabel) #added this here for consistency in case something is getting mixed up
+```
+
+4. Create the basic trees to see which nodes need to be collapsed prior to starting the manual relabeling. This is also where we identify the node number to root from.
+```{r}
+library(ggtree)
+#default tree
+Methanoperedenaceae_tree_figure<- ggtree(Methanoperedenaceae_tree) + 
+                                  geom_tree() + 
+                                  theme_tree() + 
+                                  geom_treescale() +
+                                  geom_tiplab(size=6, as_ylab = TRUE) + #this sets them all along the same axis
+                                  geom_rootedge(rootedge = 0.2) +
+                                  geom_text(aes(label=node))
+
+Methanoperedenaceae_tree_figure
+
+#rooted tree at node 151
+Methanoperedenaceae_tree_rooted<-root(Methanoperedenaceae_tree, node =151, edgelabel = TRUE)
+
+
+Methanoperedenaceae_tree_figure_rooted<-ggtree(Methanoperedenaceae_tree_rooted) %>%
+                                            rotate(89) %>% #the rotation needs to be piped in to the same chunk of code to work properly
+                                            collapse(node = 145, 'mixed') %>% 
+                                            collapse(node = 110, 'mixed') +
+                                            geom_tree() + 
+                                            theme_tree() + 
+                                            geom_treescale() +
+                                            geom_tiplab(size=12, as_ylab = TRUE) + #this sets them all along the same axis
+                                            geom_nodelab(vjust = -2, hjust = 1.5) +
+                                            geom_rootedge(rootedge = 0.05) +
+                                            geom_text(aes(label=node), vjust = 2, hjust = 1.5) +
+                                            geom_cladelabel(node=145, label="ANME-2c", align = TRUE, fontsize = 8, hjust = -1) + 
+                                            geom_cladelabel(node=110, label="Methanosarcinaceae", align = TRUE, fontsize = 8, hjust = -1) +
+                                            geom_point2(aes(subset=(node == 63)), shape = 23, size = 5, fill = 'red') +
+                                            geom_point2(aes(subset=(node == 72)), shape = 23, size = 5, fill = 'red') 
+Methanoperedenaceae_tree_figure_rooted
+```
+5. Use this command to re-scale certain clades to improve the visualization.
+```{r}
+Methanoperedenaceae_tree_figure_rooted_rescaled<- ggtree(Methanoperedenaceae_tree_rooted) %>%
+                                                  rotate(89) %>% #the rotation needs to be piped in to the same chunk of code to work properly
+                                                  scaleClade(110, scale = 0.1) %>% #this needs to come after rotation argument to work properly
+                                                  scaleClade(145, scale = 0.5) %>% 
+                                                  scaleClade(89, scale = 5) %>%
+                                                  collapse(node = 145, 'mixed') %>% 
+                                                  collapse(node = 110, 'mixed') +
+                                                  geom_treescale(x= 0, y=-30) + #reposition scale bar, but not working super well
+                                                  theme_tree() + 
+                                                  geom_tiplab(size=12, as_ylab = TRUE) + #this sets them all along the same axis
+                                                  geom_nodelab(vjust = -2, hjust = 1.5) +
+                                                  geom_rootedge(rootedge = 0.05) +
+                                                  geom_cladelabel(node=145, label="ANME-2c", align = TRUE, fontsize = 8, hjust = -1) + 
+                                                  geom_cladelabel(node=110, label="Methanosarcinaceae", align = TRUE, fontsize = 8, hjust = -1) +
+                                                  geom_point2(aes(subset=(node == 63)), shape = 23, size = 5, fill = 'red') +
+                                                  geom_point2(aes(subset=(node == 72)), shape = 23, size = 5, fill = 'red') +
+                                                  theme(axis.text.y = element_text(color = "black"))
+
+Methanoperedenaceae_tree_figure_rooted_rescaled<- Methanoperedenaceae_tree_figure_rooted_rescaled + coord_cartesian(clip = "off")
+
+Methanoperedenaceae_tree_figure_rooted_rescaled
+```
+6. Load in the metadata that was generated as an output from the GToTree workflow.
+```{r}
+library(tidyverse)
+Methanoperedenaceae_metadata<- read.delim("GTDB-Methanoperedenaceae-family-GTDB-rep-metadata.tsv", sep = "\t", header = TRUE)
+```
+
+7. Relabel the metadata so the labels line up properly with the rooted_tree phylo object we're working with. If these labels don't line up, we will not be able to display the proper labels on the tree in the end product. Additionally, you can create another data frame that is a list of the NCBI biosample numbers. This list can be used to manually retrieve information on the habitats samples were collected from to append to the tree.
+```{r}
+Methanoperedenaceae_metadata_relabel<- Methanoperedenaceae_metadata %>% 
+                                       rename(label = accession) %>%
+                                       mutate(label = recode(
+                                             label,
+"GB_GCA_013331375.1" =  "UBA10536 sp10536u (GCA_013331375.1)",
+"GB_GCA_002839545.1" = "Methanoperedens A sp002839545 (GCA_002839545.1)",
+"GB_GCA_902386255.1" = "Methanoperedens sp902386255 (GCA_902386255.1)",
+"GB_GCA_003104905.1" = "Methanoperedens sp003104905 (GCA_003104905.1)",
+"GB_GCA_012026795.1" = "Methanoperedens sp012026795 (GCA_012026795.1)",
+"RS_GCF_002487355.1" = "Methanoperedens sp002487355 (GCF_002487355.1)",
+"GB_GCA_902384525.1" = "Methanoperedens sp902384525 (GCA_902384525.1)",
+"GB_GCA_012026835.1" = "Methanoperedens sp012026835 (GCA_012026835.1)",
+"GB_GCA_902386205.1" = "Methanoperedens sp902386205 (GCA_902386205.1)",
+"GB_GCA_902386115.1" = "Methanoperedens sp902386115 (GCA_902386115.1)",
+"RS_GCF_900196725.1" = "Methanoperedens nitroreducens A (GCF_900196725.1)",
+"GB_GCA_902386135.1" = "Methanoperedens sp902386135 (GCA_902386135.1)",
+"RS_GCF_000685155.1" = "Methanoperedens nitroreducens (GCF_000685155.1)",
+"GB_GCA_902386085.1" = "Methanoperedens sp902386085 (GCA_902386085.1)")) 
+
+Methanoperedenaceae_biosample<-Methanoperedenaceae_metadata_relabel %>% select(ncbi_biosample)
+Methanoperedenaceae_biosample
+```
+
+8. Recode the metadata again using case_when arguments to manually change the habitats retrieved from NCBI. Below, I provide a list of the habitat information I was able to obtain by manually searching through the Biosample number and associated metadata. 
+
+Biosample numbers manually verified:
+- SAMEA4835441: Groundwater from legacy radioactive site
+- SAMN10872769: AOM-Mn Bioreactor
+- SAMEA4835414: Groundwater from legacy radioactive site
+- SAMN06767741: Groundwater from subsurface sediment
+- SAMEA4835440: Groundwater from legacy radioactive site
+- SAMN08364719: AOM-Fe Bioreactor
+- SAMN10872768: AOM-Mn Bioreactor
+- SAMN07620899: Sediment enrichment - NO3 (from bioproject)	
+- SAMEA4835442: Groundwater from legacy radioactive site
+- SAMEA4835439: Groundwater from legacy radioactive site
+- SAMEA104141092: Paddy soil enrichment 
+- SAMEA4835438: Groundwater from legacy radioactive site
+- SAMN02713514: Freshwater sediment enrichment - NO3, NH4+, CH4
+- SAMN13192964: As-contaminated groundwater
+
+```{r}
+Methanoperedenaceae_metadata_relabel<-  
+  ggtree(Methanoperedenaceae_tree_rooted, aes(x,y)) %<+%  
+  Methanoperedenaceae_metadata_relabel %>%
+  as.treedata %>% 
+  as_tibble %>%
+  mutate(Habitat = case_when(ncbi_biosample == "SAMEA4835441" ~ "Groundwater from legacy radioactive site",
+                            ncbi_biosample == "SAMN10872769" ~ "AOM-Mn Bioreactor",
+                            ncbi_biosample == "SAMEA4835414" ~ "Groundwater from legacy radioactive site",
+                            ncbi_biosample == "SAMN06767741" ~ "Groundwater from subsurface sediment",
+                            ncbi_biosample == "SAMEA4835440" ~ "Groundwater from legacy radioactive site",
+                            ncbi_biosample == "SAMN08364719" ~ "AOM-Fe bioreactor",
+                            ncbi_biosample == "SAMN10872768" ~ "AOM-Mn Bioreactor",
+                            ncbi_biosample == "SAMN07620899" ~ "Sediment enrichment - NO3",
+                            ncbi_biosample == "SAMEA4835442" ~ "Groundwater from legacy radioactive site",
+                            ncbi_biosample == "SAMEA4835439" ~ "Groundwater from legacy radioactive site",
+                            ncbi_biosample == "SAMEA104141092" ~ "Groundwater from legacy radioactive site",
+                            ncbi_biosample == "SAMEA4835439" ~ "Paddy soil enrichment",
+                            ncbi_biosample == "SAMEA4835438" ~ "Groundwater from legacy radioactive site",
+                            ncbi_biosample == "SAMN02713514" ~ "Freshwater sediment enrichment - NO3, NH4+, CH4",
+                            ncbi_biosample == "SAMN13192964" ~ "As-contaminated groundwater",
+                            label == "Methanoperedens sp. (MAG STD1_6)" ~ "Landfill leachate",
+                            label == "Methanoperedens sp. (MAG STD1_19)" ~ "Landfill leachate")) %>%
+                                        mutate(Shape_format = case_when(Habitat == "Landfill leachate" ~ "Triangle",
+                                                                        !Habitat == "Landfill leachate" ~ "Circle"))
+
+```
+
+9. Recreate the phylogenetic tree with the metadata on habitat appended.
+```{r}
+Methanoperedenaceae_tree_figure_rooted_rescaled<- ggtree(Methanoperedenaceae_tree_rooted, aes(x,y)) %<+%  
+                                                  Methanoperedenaceae_metadata_relabel %>%
+                                                  rotate(89) %>% #the rotation needs to be piped in to the same chunk of code to work properly
+                                                  scaleClade(110, scale = 0.1) %>% #this needs to come after rotation argument to work properly
+                                                  scaleClade(145, scale = 0.5) %>% 
+                                                  scaleClade(89, scale = 5) %>%
+                                                  collapse(node = 145, 'mixed') %>% 
+                                                  collapse(node = 110, 'mixed') +
+                                                  geom_tippoint(aes(color = Habitat, size = 10)) +
+                                                  scale_size(guide = "none") +
+                                                  scale_color_discrete(na.translate = FALSE) +
+                                                  geom_label2(aes(label = label, subset = !is.na(as.numeric(label)) & as.numeric(label))) +
+                                                  geom_treescale(x= 0, y=-30) + #reposition scale bar, but not working super well
+                                                  theme_tree() + 
+                                                  geom_tiplab(size=16, as_ylab = TRUE) + #this sets them all along the same axis
+                                                  geom_rootedge(rootedge = 0.05) +
+                                                  geom_cladelabel(node=145, label="ANME-2c", align = TRUE, fontsize = 8, hjust = -6) + 
+                                                  geom_cladelabel(node=110, label="Methanosarcinaceae", align = TRUE, fontsize = 8,
+                                                                  hjust = -2.7, vjust = -2) +
+                                                  theme(axis.text.y = element_text(color = "black")) +
+                                                  theme(legend.position = "bottom",
+                                                  legend.title=element_text(size=16), 
+                                                  legend.text=element_text(size=14)) +
+                                                  guides(color=guide_legend(nrow=3, byrow=TRUE))
+
+Methanoperedenaceae_tree_figure_rooted_rescaled<- Methanoperedenaceae_tree_figure_rooted_rescaled + coord_cartesian(clip = "off")
+
+Methanoperedenaceae_tree_figure_rooted_rescaled
+```
+10. Edit the appearance of the phylogenetic tree, conserving most of the original code from step 9. 
+```{r}
+Methanoperedenaceae_tree_figure_rooted_rescaled<- ggtree(Methanoperedenaceae_tree_rooted, 
+                                                         size = 2,
+                                                         aes(x,y)) %<+%  
+                                                  Methanoperedenaceae_metadata_relabel %>%
+                                                  rotate(89) %>% 
+                                                  scaleClade(110, scale = 0.1) %>%
+                                                  scaleClade(145, scale = 0.5) %>% 
+                                                  scaleClade(89, scale = 5) %>%
+                                                  collapse(node = 145, 'mixed') %>% 
+                                                  collapse(node = 110, 'mixed') +
+                                                  geom_tippoint(aes(color = Habitat, shape = Shape_format), size = 20) +
+                                                  scale_size(guide = "none") +
+                                                  scale_color_discrete(na.translate = FALSE) +
+                                                  geom_label2(aes(label = label, 
+                                                         subset = !is.na(as.numeric(label)) & as.numeric(label)), size = 12) +
+                                                  geom_treescale(fontsize = 20, linesize = 4) + #changed
+                                                  theme_tree() + 
+                                                  geom_tiplab(size=14, hjust = -0.2) + #changed this
+                                                  geom_rootedge(rootedge = 0.05, size = 2) +
+                                                  geom_cladelabel(node=145, label="ANME-2c", align = TRUE, 
+                                                                  fontsize = 12, hjust = -6) + 
+                                                  geom_cladelabel(node=110, label="Methanosarcinaceae", align = TRUE, 
+                                                                  fontsize = 12,
+                                                                  hjust = -2.7, vjust = -2) +
+                                                  theme(axis.text.y = element_text(color = "black")) +
+                                                  theme(legend.position = "bottom",
+                                                        legend.title=element_text(size=34), 
+                                                        legend.text=element_text(size=34),
+                                                        plot.margin=margin(60,-60,0,-60)) + #this fixed the upper margin issue
+                                                  guides(color=guide_legend(nrow=2, byrow=TRUE)) 
+                                                  
+
+
+Methanoperedenaceae_tree_figure_rooted_rescaled<- Methanoperedenaceae_tree_figure_rooted_rescaled + coord_cartesian(clip = "off") +
+                                                  scale_colour_brewer(palette ="Dark2", 
+                                                   name="Habitat",
+                                                   breaks=c("Landfill leachate",
+                                                            "As-contaminated groundwater",
+                                                            "Groundwater from subsurface sediment",
+                                                            "Groundwater from legacy radioactive site",
+                                                            "AOM-Fe bioreactor",
+                                                            "AOM-Mn Bioreactor",
+                                                            "Sediment enrichment - NO3",
+                                                            "Freshwater sediment enrichment - NO3, NH4+, CH4"),
+                                                   labels=c("Landfill leachate",
+                                                            "As-contaminated groundwater",
+                                                            "Groundwater from subsurface sediment",
+                                                            "Groundwater from legacy radioactive site",
+                                                            "AOM-Fe bioreactor",
+                                                            "AOM-Mn Bioreactor",
+                                                            "Sediment enrichment - NO3",
+                                                            "Freshwater sediment enrichment - NO3, NH4+, CH4"))
+                                                  
+Methanoperedenaceae_tree_figure_rooted_rescaled
+ggsave("FigS4_Methanoperedenaceae_phylogentic_tree_before_editing.pdf", height = 30, width = 50,limitsize = FALSE, device = "pdf")
+```
+**Note**: This image file was subsequently edited in vector graphing software to improve the presentation and readability. 
+
+# 3. Run the Methanoperedenaceae genomes available from GTDB through the DRAM workflow
+1. Create a dedicated directory to house all of the Methanoperedenaceae genomes.
+```{bash}
+mkdir ~/directory/DRAM
+```
+
+2. Pull the accession numbers for the *Methanoperedenaceae* family used to build the original tree using the 'bit' package. We can ignore the families that comprise the out groups because we're not interested in annotating the genomes in DRAM.
+```{bash}
+source activate gtotree
+cd ~/name/directory
+gtt-get-accessions-from-GTDB -t Methanoperedenaceae --GTDB-representatives-only
+```
+
+3. Retrieve the MAGs of interest from your data set and copy to the same directory.
+```{bash}
+cp ~/genomes/of/interest/file.fasta ~/name/directory
+ls *fasta > Methanoperedenaceae_fasta_input_DRAM.txt
+```
+
+4. Download the genome from the accession list output from GtoTree using the 'bit' command. Use the output file 'GTDB-Methanoperedenaceae-family-GTDB-rep-accs.txt' from step 2 above as input.
+```{bash}
+cd ~/name/directory
+bit-dl-ncbi-assemblies -w GTDB-Methanoperedenaceae-family-GTDB-rep-accs.txt -f fasta -j 4
+```
+
+5. Unzip files so they are in the same file format as the bins in the original data set. Change the file extensions for MAGs of interest from .fasta to .fa.
+```{bash}
+cd ~/name/directory
+gunzip *.gz
+mv Genome.fasta Genome.fa
+```
+
+6. Make sure all of the fasta files for the genomes are in the right folder and initiate DRAM in a background window using 'tmux'.
+```{bash}
+#Generate new tmux session
+tmux new -s DRAM
+tmux ls
+tmux a -t DRAM
+
+#Kill session if need be
+tmux kill-session -t DRAM
+
+#Activate the conda environment containing DRAM
+source activate /directory/with/conda_envs/DRAM
+
+cd ~/directory/with/genomes
+
+#annotation command
+DRAM.py annotate -i 'Methanoperedenaceae_genomes_GTDB/*.fa' -o annotation --threads 10
+
+#distill command
+DRAM.py distill -i ~/DRAM/annotation/annotations.tsv -o ~/DRAM/output/genome_summaries --trna_path ~/DRAM/annotation/trnas.tsv --rrna_path ~/DRAM/annotation/rrnas.tsv
+
+#rename files to something more informative
+mv product.tsv Methanoperedenaceae_product.tsv
+mv genome_stats.tsv Methanoperedenaceae_genome_stats.tsv
+mv metabolism_summary.xlsx Methanoperedenaceae_metabolism_summary.xlsx
+mv product.html Methanoperedenaceae_product.html
+```
+
+7. This is an example code of adding the uniref flag to generate annotations with this database
+
+```{bash}
+#Generate new tmux session
+tmux new -s DRAM
+tmux ls
+tmux a -t DRAM
+
+#Kill session if need be
+tmux kill-session -t DRAM
+
+source activate /directory/with/conda_envs/DRAM
+
+cd ~/directory/with/genomes
+
+DRAM.py annotate -i 'Methanoperedenaceae_genomes_GTDB/*.fa' -o annotation_uniref --use_uniref --threads 10
+```
+
+2. Run the distill command from DRAM making sure to create a new output folder to distinguish from the original.
+```{bash}
+source activate /mnt/Data/conda_envs/DRAM
+
+DRAM.py distill -i ~/DRAM/annotation_uniref/annotations.tsv -o ~/DRAM/output_uniref/genome_summaries --trna_path ~/DRAM/annotation_uniref/trnas.tsv --rrna_path ~/DRAM/annotation_uniref/rrnas.tsv
+```
+
+3. Rename everything to something meaningful to include the Uniref information. 
+```{bash}
+cd ~/DRAM/output_uniref/genome_summariesgenome_summaries_uniref
+mv product.tsv Methanoperedenaceae_product_uniref.tsv
+mv genome_stats.tsv Methanoperedenaceae_genome_stats_uniref.tsv
+mv metabolism_summary.xlsx Methanoperedenaceae_metabolism_summary_uniref.xlsx
+mv product.html Methanoperedenaceae_product_uniref.html
+
+cd ~/DRAM/annotation_uniref/annotation_uniref
+mv annotations.tsv Methanoperedenaceae_annotations_uniref.tsv
+```
+**Note:** From this point you can copy the output files over to your personal machine to produce File S6 and data visualizations summarizing this data. The same analyses has been applied to the Mehtylacidiphilaceae family.
+
+# 4. Reproduce the DRAM heatmaps in R
+1. Read in the Methylomirabilis_product.tsv file.
+```{r}
+library(tidyverse)
+library(data.table)
+product<-fread("Methanoperedenaceae_product.tsv", sep = "\t", header = "auto") 
+#using the fread package here helps conserve the special characters in the pathway names
+head(product) #quickly check it was loaded in properly
+```
+
+2. Relabel the 'genome' variable to be line up with the names listed in the phylogenetic tree using the 'grepl' and 'case_when' commands.
+```{r}
+Methanoperedenaceae_product_relabel<- product %>%
+mutate(genome = recode( #manually recode the labels here making sure to preserve original label output by GToTree
+       genome,
+"GCA_013331375.1" =  "UBA10536 sp10536u (GCA_013331375.1)",
+"GCA_002839545.1" = "Methanoperedens A sp002839545 (GCA_002839545.1)",
+"GCA_902386255.1" = "Methanoperedens sp902386255 (GCA_902386255.1)",
+"GCA_003104905.1" = "Methanoperedens sp003104905 (GCA_003104905.1)",
+"GCA_012026795.1" = "Methanoperedens sp012026795 (GCA_012026795.1)",
+"GCA_002487355.1" = "Methanoperedens sp002487355 (GCF_002487355.1)", #changed GCF to GCA on front end because that is how DRAM processes it
+"GCA_902384525.1" = "Methanoperedens sp902384525 (GCA_902384525.1)",
+"GCA_012026835.1" = "Methanoperedens sp012026835 (GCA_012026835.1)",
+"GCA_902386205.1" = "Methanoperedens sp902386205 (GCA_902386205.1)",
+"GCA_902386115.1" = "Methanoperedens sp902386115 (GCA_902386115.1)",
+"GCA_900196725.1" = "Methanoperedens nitroreducens A (GCF_900196725.1)", #changed GCF to GCA on front end because that is how DRAM processes it
+"GCA_902386135.1" = "Methanoperedens sp902386135 (GCA_902386135.1)",
+"GCA_000685155.1" = "Methanoperedens nitroreducens (GCF_000685155.1)",
+"GCA_902386085.1" = "Methanoperedens sp902386085 (GCA_902386085.1)",
+"STD1_6_scaffolds_2500" = "Methanoperedens sp. (MAG STD1_6)",
+"STD1_19_scaffolds_2500" = "Methanoperedens sp. (MAG STD1_19)"
+)) %>%
+  rename(label = genome) #make sure the names are consistent between the two here to facilitate joining if need be
+write.table(Methanoperedenaceae_product_relabel, file = "Methanoperedenaceae_product_relabel.tsv", sep ='\t', row.names = FALSE)
+```
+
+3. Create the data frames for the percent complete pathway data and the presence/absence data following the workflow used for the methanogenic community.
+```{r}
+Methanoperedenaceae_percent_complete_gathered<-Methanoperedenaceae_product_relabel %>% 
+                           gather(key = Pathway_name, value = Percent_complete, 
+                                  "3-Hydroxypropionate bi-cycle":"Complex V: V/A-type ATPase, prokaryotes", na.rm=FALSE) %>%
+                           select(-c("CAZy: Alpha-galactans": "Sulfur metabolism: thiosulfate => sulfite")) %>% 
+                           mutate(group = case_when(grepl("\\:.*", Pathway_name) ~ 
+                           sub("\\:.*", "", Pathway_name),
+                           !grepl("\\:.*", Pathway_name) ~ "Module")) %>% #maintained up to this step
+                           mutate(Pathway_name = gsub("Complex I*:","",Pathway_name)) %>% #had to be more specific in filtering
+                           mutate(Pathway_name = gsub("Complex IV*.*:","",Pathway_name)) %>%
+                           mutate(Pathway_name = gsub("Complex V*.*:","",Pathway_name))
+
+
+Methanoperedenaceae_true_false_gathered<- Methanoperedenaceae_product_relabel %>%
+                      gather(Pathway_name, Presence_absence,
+                             "CAZy: Alpha-galactans":"Sulfur metabolism: thiosulfate => sulfite", na.rm = FALSE) %>%
+                      select(-c("3-Hydroxypropionate bi-cycle":"Complex V: V/A-type ATPase, prokaryotes")) %>%
+                      mutate(group = case_when(grepl("\\:.*", Pathway_name) ~ 
+                           sub("\\:.*", "", Pathway_name))) %>%
+                      mutate(Pathway_name = gsub(".*:","",Pathway_name))
+```
+
+4. Re-define the order you want the variables to appear in for the quantitative and categorical data using the methanogen data frame.
+```{r}
+#Quantitative data script
+Methanoperedenaceae_percent_complete_gathered$Pathway_name<-trimws(Methanoperedenaceae_percent_complete_gathered$Pathway_name, which = c("left")) 
+
+Methanoperedenaceae_percent_complete_gathered$Pathway_name = factor(Methanoperedenaceae_percent_complete_gathered$Pathway_name, 
+                                          levels =c(
+                                            
+                                          #Module facet
+                                            
+                                          "Glycolysis (Embden-Meyerhof pathway), glucose => pyruvate", 
+                                          "Pentose phosphate pathway (Pentose phosphate cycle)",
+                                          "Entner-Doudoroff pathway, glucose-6P => glyceraldehyde-3P + pyruvate",
+                                          "Citrate cycle (TCA cycle, Krebs cycle)",
+                                          "Glyoxylate cycle",
+                                          "Reductive pentose phosphate cycle (Calvin cycle)",
+                                          "Reductive citrate cycle (Arnon-Buchanan cycle)",
+                                          "Dicarboxylate-hydroxybutyrate cycle",
+                                          "Hydroxypropionate-hydroxybutylate cycle",
+                                          "3-Hydroxypropionate bi-cycle",
+                                          "Reductive acetyl-CoA pathway (Wood-Ljungdahl pathway)",
+                                          "Acetyl-CoA pathway, CO2 => acetyl-CoA",
+                                          "Methanogenesis, CO2 => methane",
+                                          
+                                          #Complex I
+                                          
+                                          "NADH:quinone oxidoreductase, prokaryotes",
+                                          "NAD(P)H:quinone oxidoreductase, chloroplasts and cyanobacteria",
+                                          "NADH dehydrogenase (ubiquinone) 1 alpha subcomplex",
+                                          
+                                          #Complex II
+                                          
+                                          "Succinate dehydrogenase (ubiquinone)",
+                                          "Succinate dehydrogenase, prokaryotes",
+                                          "Fumarate reductase, prokaryotes",
+                                          
+                                          #Complex III
+                                          
+                                          "Cytochrome bc1 complex respiratory unit", #what's the difference between first and second?
+                                          "Cytochrome bc1 complex",
+                                          "Cytochrome bd ubiquinol oxidase",
+                                          
+                                          #Complex IV high affinity
+                                          
+                                          #"Cytochrome bd ubiquinol oxidase", This level is being duplicated, but may not be an issue
+                                          "Cytochrome c oxidase, cbb3-type",
+                                          
+                                          #Complex IV low affinity
+                                          
+                                          "Cytochrome c oxidase",
+                                          "Cytochrome c oxidase, prokaryotes",
+                                          "Cytochrome aa3-600 menaquinol oxidase",
+                                          "Cytochrome o ubiquinol oxidase",
+                                          
+                                          #Complex V
+                                          "F-type ATPase, prokaryotes and chloroplasts",
+                                          "F-type ATPase, eukaryotes",
+                                          "V/A-type ATPase, prokaryotes",
+                                          "V-type ATPase, eukaryotes"
+                                          ))
+
+#Categorical data script
+Methanoperedenaceae_true_false_gathered$Pathway_name<-trimws(Methanoperedenaceae_true_false_gathered$Pathway_name, which = c("left")) 
+
+Methanoperedenaceae_true_false_gathered$Pathway_name = factor(Methanoperedenaceae_true_false_gathered$Pathway_name, 
+                                          levels =c(
+                                            
+                                          #CAZy facet
+                                            
+                                          "Polyphenolics", 
+                                          "Crystalline Cellulose",
+                                          "Amorphous Cellulose",
+                                          "Xyloglucan",
+                                          "Xylans",
+                                          "Alpha-mannan",
+                                          "Beta-mannan",
+                                          "Mixed-Linkage glucans",
+                                          "Starch",
+                                          "Pectin",
+                                          "Arabinan",
+                                          "Alpha-galactans",
+                                          "Beta-galactan (pectic galactan)",
+                                          "Chitin",
+                                          "Sulf-Polysachharides",
+                                          "Mucin",
+                                          "Fucose Cleavage",
+                                          "Arabinose cleavage",
+                                          "Rhamnose cleavage",
+                                          
+                                          #Nitrogen metabolism
+                                          
+                                          "ammonia => nitrite",
+                                          "Bacterial/Archaeal ammonia oxidation",
+                                          "Bacterial (aerobic-specific) ammonia oxidation",
+                                          "Bacterial (anaerobic-specific) ammonia oxidation",
+                                          "nitrite => nitrate",
+                                          "nitrate => nitrite",
+                                          "nitrite => nitric oxide",
+                                          "Dissimilatory nitrite reduction to ammonia (DNRA)",
+                                          "nitric oxide => nitrous oxide",
+                                          "nitrous oxide => nitrogen",
+                                          "nitrogen => ammonia",
+                                          "Nitrogen fixation altennative",
+                                          
+                                          #Sulfur metabolism
+                                          "dissimilatory sulfate reduction (and oxidation) sulfate => sulfide",
+                                          "thiosulfate => sulfite",
+                                          "Thiosulfate oxidation by SOX complex, thiosulfate => sulfate",
+                                          "tetrathionate => thiosulfate",
+                                          
+                                          #Other reductases
+                                          
+                                          "selenate/Chlorate reduction",
+                                          "TMAO reductase",
+                                          "mercury reduction",
+                                          "arsenate reduction, pt 1",
+                                          "arsenate reduction, pt 2",
+                                          
+                                          #Photosynthesis
+                                          "Photosystem I",
+                                          "Photosystem II",
+                                          
+                                          #Methanogenesis and methanotrophy
+                                          
+                                          "Key functional gene",
+                                          "acetate => methane, pt 1",
+                                          "acetate => methane, pt 2",
+                                          "acetate => methane, pt 3",
+                                          "methanol => methane",
+                                          "trimethylamine => dimethylamine",
+                                          "dimethylamine => monomethylamine",
+                                          "monomethylamine => ammonia",
+                                          "putative but not defining CO2 => methane",
+                                          "methane => methanol, with oxygen (pmo)",
+                                          "methane => methanol, with oxygen (mmo)",
+                                          
+                                          #SCFA and alcohol conversions
+                                          "pyruvate => acetyl CoA v1",
+                                          "pyruvate => acetyl CoA v2",
+                                          "pyruvate => acetylCoA f+ formate v3",
+                                          "acetate, pt 1",
+                                          "acetate, pt 2",
+                                          "acetate, pt 3",
+                                          "lactate L",
+                                          "lactate D",
+                                          "Butyrate, pt 1",
+                                          "Butyrate, pt 2",
+                                          "Propionate, pt 1",
+                                          "Propionate, pt 2",
+                                          "Alcohol production"
+                                          ))
+
+```
+
+5. Create the heatmap showing the full metabolic capacity to start. I have found the best way to reorder a handful of genomes is to do it manually, but something important to bear in mind is the final order in the heatmap needs to be *reversed*.
+```{r}
+library(RColorBrewer)
+library(patchwork)
+library(forcats)
+library(ggtext)
+#set theme
+heatmap_theme<- theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+               panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.text.x = element_text(color = "black", size = 14),
+               axis.text.y = element_text(color = "black", size = 14),
+               axis.title.x = element_text(color = "black", size = 16, vjust = -3),
+               axis.title.y = element_text(color = "black", size = 16, vjust = 6),
+               legend.title=element_text(size=16), 
+               legend.text=element_text(size=14),
+               legend.key = element_rect(fill = "white", color = NA),
+               plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+               panel.border = element_rect(colour = "black", fill=NA, size=1),
+               plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+#set the order for the label to match the tree, for now this must be done manually but is manageable with a small number of genomes
+Methanoperedenaceae_percent_complete_gathered$label_ordered= factor(Methanoperedenaceae_percent_complete_gathered$label, 
+                                                            levels =c("UBA10536 sp10536u (GCA_013331375.1)",
+                                                                      "Methanoperedens A sp002839545 (GCA_002839545.1)",
+                                                                      "Methanoperedens sp. (MAG STD1_6)",
+                                                                      "Methanoperedens sp902386255 (GCA_902386255.1)",
+                                                                      "Methanoperedens sp003104905 (GCA_003104905.1)",
+                                                                      "Methanoperedens sp012026795 (GCA_012026795.1)",
+                                                                      "Methanoperedens sp002487355 (GCF_002487355.1)",
+                                                                      "Methanoperedens sp902384525 (GCA_902384525.1)",
+                                                                      "Methanoperedens sp012026835 (GCA_012026835.1)",
+                                                                      "Methanoperedens sp902386205 (GCA_902386205.1)",
+                                                                      "Methanoperedens sp902386115 (GCA_902386115.1)",
+                                                                      "Methanoperedens sp. (MAG STD1_19)",
+                                                                      "Methanoperedens sp902386085 (GCA_902386085.1)",
+                                                                      "Methanoperedens nitroreducens (GCF_000685155.1)",
+                                                                      "Methanoperedens nitroreducens A (GCF_900196725.1)",
+                                                                      "Methanoperedens sp902386135 (GCA_902386135.1)"))
+
+#edit the group variable to account for long names
+Methanoperedenaceae_percent_complete_gathered$group = factor(Methanoperedenaceae_percent_complete_gathered$group, 
+                                          levels =c("Module", "Complex I", "Complex II", "Complex III", 
+                                                    "Complex IV High affinity", "Complex IV Low affinity","Complex V")) #order the facets
+                                                                
+
+Methanoperedenaceae_percent_complete_heatmap<- Methanoperedenaceae_percent_complete_gathered %>%
+                                            #mutate(label_ordered = str_replace(string = label_ordered,
+                                                #pattern = "Methanoperedens",
+                                                #replacement = "*Methanoperedens*")) %>%
+                                            #mutate(label_ordered = str_replace(string = label_ordered,
+                                                #pattern = "nitroreducens",
+                                                #replacement = "*nitroreducens*")) %>%
+                    ggplot(aes(x=Pathway_name, y = fct_rev(label_ordered), fill=Percent_complete, na.rm = TRUE))+
+                    geom_tile()+
+                    facet_grid(~group, scales = "free", space = "free", labeller = labeller(group = label_wrap_gen(10))) +
+                    theme(axis.text.x=element_text(angle=90, hjust=1)) +
+                    scale_fill_distiller(palette = "YlGnBu", trans = "reverse", limits = c(1,0))+
+                    labs(title = "", x = "", y = "", fill = "% complete") +
+                    heatmap_theme +
+                    theme(
+                          legend.position = "right", legend.direction = "vertical", #set legend position coordinates here
+                          legend.key.size = unit(1.5, "cm"), legend.key.width = unit(3,"cm"),
+                          legend.text = element_text(size = 30),
+                          legend.title = element_text(size = 30),
+                          strip.background = element_blank(), strip.text.y = element_blank(), 
+                          strip.text.x = element_text(size = 24),
+                          axis.text.x = element_text(color = "black", size = 24),
+                          axis.text.y = element_markdown(size = 32, face = "bold"),
+                          plot.margin=margin(60,-60,0,0)) +
+                    guides(guide_colorbar(reverse = TRUE))
+
+Methanoperedenaceae_percent_complete_heatmap
+
+#Reset the order for the true/false dataframe
+#set the order for the label to match the tree, for now this must be done manually but is manageable with a small number of genomes
+Methanoperedenaceae_true_false_gathered$label_ordered= factor(Methanoperedenaceae_true_false_gathered$label, 
+                                                            levels =c("UBA10536 sp10536u (GCA_013331375.1)",
+                                                                      "Methanoperedens A sp002839545 (GCA_002839545.1)",
+                                                                      "Methanoperedens sp. (MAG STD1_6)",
+                                                                      "Methanoperedens sp902386255 (GCA_902386255.1)",
+                                                                      "Methanoperedens sp003104905 (GCA_003104905.1)",
+                                                                      "Methanoperedens sp012026795 (GCA_012026795.1)",
+                                                                      "Methanoperedens sp002487355 (GCF_002487355.1)",
+                                                                      "Methanoperedens sp902384525 (GCA_902384525.1)",
+                                                                      "Methanoperedens sp012026835 (GCA_012026835.1)",
+                                                                      "Methanoperedens sp902386205 (GCA_902386205.1)",
+                                                                      "Methanoperedens sp902386115 (GCA_902386115.1)",
+                                                                      "Methanoperedens sp. (MAG STD1_19)",
+                                                                      "Methanoperedens sp902386085 (GCA_902386085.1)",
+                                                                      "Methanoperedens nitroreducens (GCF_000685155.1)",
+                                                                      "Methanoperedens nitroreducens A (GCF_900196725.1)",
+                                                                      "Methanoperedens sp902386135 (GCA_902386135.1)"))
+
+#recode the TRUE/FALSE data to presence absence
+Methanoperedenaceae_true_false_gathered<-Methanoperedenaceae_true_false_gathered %>% 
+                                 mutate(Presence_absence = as.factor(Presence_absence)) %>%
+                                 mutate(Presence_absence = recode(Presence_absence, 'TRUE' = "Present", 'FALSE' = "Absent"))
+
+#edit the group variable to present them in the proper order for methanogen-centric data
+Methanoperedenaceae_true_false_gathered$group = factor(Methanoperedenaceae_true_false_gathered$group, 
+                                          levels =c("Methanogenesis and methanotrophy", "CAZy", "SCFA and alcohol conversions", 
+                                                    "Nitrogen metabolism", "Sulfur metabolism", "Other Reductases","Photosynthesis")) #order facets
+
+Methanoperedenaceae_true_false_heatmap<- Methanoperedenaceae_true_false_gathered %>%
+                    ggplot(aes(x=Pathway_name, y = fct_rev(label_ordered), fill=Presence_absence))+
+                    geom_tile(aes())+
+                    facet_grid( ~ group, scales = "free", space = "free", labeller = labeller(group = label_wrap_gen(10))) +
+                    theme(axis.text.x=element_text(angle=90, hjust=1)) +
+                    scale_fill_manual(values = c("#CCFFFF", "#009933"))+ 
+                    labs(title = "", x = "", y = "", fill = "Function") +
+                    heatmap_theme +
+                    theme(plot.title = element_text(hjust = 0.7, vjust = -1), 
+                          legend.position = "right", legend.direction = "vertical", #set legend position coordinates here
+                          legend.key.size = unit(1.5, "cm"), legend.key.width = unit(3,"cm"),
+                          legend.text = element_text(size = 30),
+                          legend.title = element_text(size = 30),
+                          strip.background = element_blank(), 
+                          strip.text.y = element_blank(), 
+                          strip.text.x = element_text(size = 24),
+                          axis.text.x = element_text(color = "black", size = 24),
+                          axis.text.y = element_blank(),
+                          axis.ticks.y=element_blank(),
+                          plot.margin=margin(60,0,0,-60))
+
+Methanoperedenaceae_combined_plot<- Methanoperedenaceae_percent_complete_heatmap + Methanoperedenaceae_true_false_heatmap +
+                                 plot_layout(guides = "collect") +
+                                 plot_layout(ncol = 2, nrow = 1, widths = c(1, 1.2)) +
+                                 plot_annotation(title = "Metabolic capacity in the Methanoperedenaceae family",
+                                             theme = theme(plot.title = element_text(size = 44, hjust = 0.5, face = "bold")))
+
+Methanoperedenaceae_combined_plot #let's take a quick look even if it is too big to get a sense if everything combined properly
+ggsave("Methanoperedenaceae_full_metabolism.pdf", height=25, width=75, device="pdf", limitsize = FALSE)
+```
+**Need to double check that the fct-rev worked properly and didn't just change the labels**
+- can also check against the product.html
+
+6. Reproduce a similar graph but this time only focus on the methane cycling pathways and redox metabolism. 
+```{r}
+library(RColorBrewer)
+library(patchwork)
+library(forcats)
+library(ggtext)
+#set theme
+heatmap_theme<- theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+               panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.text.x = element_text(color = "black", size = 14),
+               axis.text.y = element_text(color = "black", size = 14),
+               axis.title.x = element_text(color = "black", size = 16, vjust = -3),
+               axis.title.y = element_text(color = "black", size = 16, vjust = 6),
+               legend.title=element_text(size=16), 
+               legend.text=element_text(size=14),
+               legend.key = element_rect(fill = "white", color = NA),
+               plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+               panel.border = element_rect(colour = "black", fill=NA, size=1),
+               plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+#set the order for the label to match the tree, for now this must be done manually but is manageable with a small number of genomes
+Methanoperedenaceae_percent_complete_gathered$label_ordered= factor(Methanoperedenaceae_percent_complete_gathered$label, 
+                                                            levels =c("UBA10536 sp10536u (GCA_013331375.1)",
+                                                                      "Methanoperedens A sp002839545 (GCA_002839545.1)",
+                                                                      "Methanoperedens sp. (MAG STD1_6)",
+                                                                      "Methanoperedens sp902386255 (GCA_902386255.1)",
+                                                                      "Methanoperedens sp003104905 (GCA_003104905.1)",
+                                                                      "Methanoperedens sp012026795 (GCA_012026795.1)",
+                                                                      "Methanoperedens sp002487355 (GCF_002487355.1)",
+                                                                      "Methanoperedens sp902384525 (GCA_902384525.1)",
+                                                                      "Methanoperedens sp012026835 (GCA_012026835.1)",
+                                                                      "Methanoperedens sp902386205 (GCA_902386205.1)",
+                                                                      "Methanoperedens sp902386115 (GCA_902386115.1)",
+                                                                      "Methanoperedens sp. (MAG STD1_19)",
+                                                                      "Methanoperedens sp902386085 (GCA_902386085.1)",
+                                                                      "Methanoperedens nitroreducens (GCF_000685155.1)",
+                                                                      "Methanoperedens nitroreducens A (GCF_900196725.1)",
+                                                                      "Methanoperedens sp902386135 (GCA_902386135.1)"))
+
+#edit the group variable to account for long names
+Methanoperedenaceae_percent_complete_gathered$group = factor(Methanoperedenaceae_percent_complete_gathered$group, 
+                                          levels =c("Module", "Complex I", "Complex II", "Complex III", 
+                                                    "Complex IV High affinity", "Complex IV Low affinity","Complex V")) #order the facets
+                                                                
+
+Methanoperedenaceae_percent_complete_heatmap<- Methanoperedenaceae_percent_complete_gathered %>%
+                                            #mutate(label_ordered = str_replace(string = label_ordered,
+                                                #pattern = "Methanoperedens",
+                                                #replacement = "*Methanoperedens*")) %>%
+                                            #mutate(label_ordered = str_replace(string = label_ordered,
+                                                #pattern = "nitroreducens",
+                                                #replacement = "*nitroreducens*")) %>%
+                    filter(group == "Module" & Pathway_name == "Acetyl-CoA pathway, CO2 => acetyl-CoA" |
+                           group == "Module" & Pathway_name == "Methanogenesis, CO2 => methane" |
+                           group == "Complex I" |
+                           group == "Complex II" |
+                           group == "Complex III" |
+                           group == "Complex IV High affinity" |
+                           group == "Complex IV Low affinity" |
+                           group == "Complex V") %>%
+                    ggplot(aes(x=Pathway_name, y = fct_rev(label_ordered), fill=Percent_complete, na.rm = TRUE))+
+                    geom_tile()+
+                    facet_grid(~group, scales = "free", space = "free", labeller = labeller(group = label_wrap_gen(10))) +
+                    theme(axis.text.x=element_text(angle=90, hjust=1)) +
+                    scale_fill_distiller(palette = "YlGnBu", trans = "reverse", limits = c(1,0))+
+                    labs(title = "", x = "", y = "", fill = "% complete") +
+                    heatmap_theme +
+                    theme(
+                          legend.position = "right", legend.direction = "vertical", #set legend position coordinates here
+                          legend.key.size = unit(1.5, "cm"), legend.key.width = unit(3,"cm"),
+                          legend.text = element_text(size = 30),
+                          legend.title = element_text(size = 30),
+                          strip.background = element_blank(), strip.text.y = element_blank(), 
+                          strip.text.x = element_text(size = 24),
+                          axis.text.x = element_text(color = "black", size = 24),
+                          axis.text.y = element_markdown(size = 32, face = "bold"),
+                          plot.margin=margin(60,-60,0,0)) +
+                    guides(guide_colorbar(reverse = TRUE))
+
+Methanoperedenaceae_percent_complete_heatmap
+
+#Reset the order for the true/false dataframe
+#set the order for the label to match the tree, for now this must be done manually but is manageable with a small number of genomes
+Methanoperedenaceae_true_false_gathered$label_ordered= factor(Methanoperedenaceae_true_false_gathered$label, 
+                                                            levels =c("UBA10536 sp10536u (GCA_013331375.1)",
+                                                                      "Methanoperedens A sp002839545 (GCA_002839545.1)",
+                                                                      "Methanoperedens sp. (MAG STD1_6)",
+                                                                      "Methanoperedens sp902386255 (GCA_902386255.1)",
+                                                                      "Methanoperedens sp003104905 (GCA_003104905.1)",
+                                                                      "Methanoperedens sp012026795 (GCA_012026795.1)",
+                                                                      "Methanoperedens sp002487355 (GCF_002487355.1)",
+                                                                      "Methanoperedens sp902384525 (GCA_902384525.1)",
+                                                                      "Methanoperedens sp012026835 (GCA_012026835.1)",
+                                                                      "Methanoperedens sp902386205 (GCA_902386205.1)",
+                                                                      "Methanoperedens sp902386115 (GCA_902386115.1)",
+                                                                      "Methanoperedens sp. (MAG STD1_19)",
+                                                                      "Methanoperedens sp902386085 (GCA_902386085.1)",
+                                                                      "Methanoperedens nitroreducens (GCF_000685155.1)",
+                                                                      "Methanoperedens nitroreducens A (GCF_900196725.1)",
+                                                                      "Methanoperedens sp902386135 (GCA_902386135.1)"))
+
+#recode the TRUE/FALSE data to presence absence
+Methanoperedenaceae_true_false_gathered<-Methanoperedenaceae_true_false_gathered %>% 
+                                 mutate(Presence_absence = as.factor(Presence_absence)) %>%
+                                 mutate(Presence_absence = recode(Presence_absence, 'TRUE' = "Present", 'FALSE' = "Absent"))
+
+#edit the group variable to present them in the proper order for methanogen-centric data
+Methanoperedenaceae_true_false_gathered$group = factor(Methanoperedenaceae_true_false_gathered$group, 
+                                          levels =c("Methanogenesis and methanotrophy", "CAZy", "SCFA and alcohol conversions", 
+                                                    "Nitrogen metabolism", "Sulfur metabolism", "Other Reductases","Photosynthesis")) #order facets
+
+Methanoperedenaceae_true_false_heatmap<- Methanoperedenaceae_true_false_gathered %>%
+                    filter(group == "Methanogenesis and methanotrophy" |
+                           group == "Nitrogen metabolism" |
+                           group == "Sulfur metabolism" |
+                           group == "Other reductases") %>%
+                    ggplot(aes(x=Pathway_name, y = fct_rev(label_ordered), fill=Presence_absence))+
+                    geom_tile(aes())+
+                    facet_grid( ~ group, scales = "free", space = "free", labeller = labeller(group = label_wrap_gen(10))) +
+                    theme(axis.text.x=element_text(angle=90, hjust=1)) +
+                    scale_fill_manual(values = c("#CCFFFF", "#009933"))+ 
+                    labs(title = "", x = "", y = "", fill = "Function") +
+                    heatmap_theme +
+                    theme(plot.title = element_text(hjust = 0.7, vjust = -1), 
+                          legend.position = "right", legend.direction = "vertical", #set legend position coordinates here
+                          legend.key.size = unit(1.5, "cm"), legend.key.width = unit(3,"cm"),
+                          legend.text = element_text(size = 30),
+                          legend.title = element_text(size = 30),
+                          strip.background = element_blank(), 
+                          strip.text.y = element_blank(), 
+                          strip.text.x = element_text(size = 24),
+                          axis.text.x = element_text(color = "black", size = 24),
+                          axis.text.y = element_blank(),
+                          axis.ticks.y=element_blank(),
+                          plot.margin=margin(60,0,0,-60))
+
+Methanoperedenaceae_combined_plot<- Methanoperedenaceae_percent_complete_heatmap + Methanoperedenaceae_true_false_heatmap +
+                                 plot_layout(guides = "collect") +
+                                 plot_layout(ncol = 2, nrow = 1, widths = c(0.75, 0.5)) +
+                                 plot_annotation(title = "Metabolic capacity in the Methanoperedenaceae family",
+                                             theme = theme(plot.title = element_text(size = 44, hjust = 0.5, face = "bold")))
+
+Methanoperedenaceae_combined_plot #let's take a quick look even if it is too big to get a sense if everything combined properly
+ggsave("Methanoperedenaceae_methane_redox_metabolism.pdf", height=25, width=60, device="pdf", limitsize = FALSE)
+```
