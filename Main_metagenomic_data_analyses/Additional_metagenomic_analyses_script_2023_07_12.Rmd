@@ -1,0 +1,2742 @@
+---
+title: "Methane manuscript additional analyses"
+author: "Daniel Gregoire"
+Date: '2023-05-22'
+output:
+  html_notebook:
+    theme: united
+    toc: yes
+  html_document:
+    toc: yes
+    df_print: paged
+---
+
+#Summary of workflow
+1. Ordination analyses of MAG relative abundance
+  1.1. Phylum level
+  1.2. Family level
+2. Heatmaps to visualize MAG relative abundance 
+  2.1. Phylum
+  2.2. Family
+  2.3. Methane cycling guilds
+3. DRAM output for syntrophs involved in acetate cycling
+4. Additional resources
+
+# Session information
+
+# 1. Ordination analyses of MAG relative abundance
+We will produce ordinations to visualize beta-diversity using MAGs as the analytical unit. This analyses will use MAG coverage data as the measure of abundance and we will generate a relative abundance measure by summing all of to coverage values for all MAGs recovered from a sampling site and then dividing each individual MAGs average coverage across scaffolds by that total.
+
+## 1.1. Phylum level ordination
+1. Boot up the required packages to manipulate the data and generate distance matrices. Load in the output file created by DRAM that includes the product file joined to the product file that includes coverage data for each MAG. Generate a separate data frame that contains the number of distinct genomes at each sampling site. This will be used to size the points in the ordinations later on to give a sense of alpha diversity.
+```{r}
+library(tidyverse)
+library(vegan)
+library(data.table)
+joint_file<-fread("FileS1_DRAM_product_connected_GTDB_taxonomy.tsv", sep = "\t", header = "auto")
+
+#generate dedicated data frames from dominant families
+Arcobacteraceae <- joint_file %>% filter(Family == "f__Arcobacteraceae")
+Gallionellaceae <- joint_file %>% filter(Family == "f__Gallionellaceae")
+Sulfurimonadaceae <- joint_file %>% filter(Family == "f__Sulfurimonadaceae")
+Cloacimonadaceae <- joint_file %>% filter(Family == "f__Cloacimonadaceae")
+Dysgonomonadaceae <- joint_file %>% filter(Family == "f__Dysgonomonadaceae")
+
+
+Distinct_genomes <-joint_file %>%
+                   filter(!Sample_site == "CSWMC") %>% #remove the water treatment plant data
+                   select(Sample_site, genome) %>%
+                   group_by(Sample_site) %>%
+                   mutate(distinct_genomes = n_distinct(genome)) %>%
+                   distinct(Sample_site, distinct_genomes) %>%
+                   as.data.frame() #make sure it is a data frame
+```
+
+2. Create a distance matrix at the phylum level to provide some high level summary data on difference between metagenomes.
+```{r}
+Phylum_data<-joint_file %>%
+             filter(!Sample_site == "CSWMC") %>% #remove the water treatment plant prior to generating distance matrices
+             select(Sample_site, genome, mean_coverage_bin, Phylum) %>%
+             group_by(Sample_site) %>%
+             mutate(total_mean_coverage_site = sum(mean_coverage_bin)) %>% #create the denominator for relative abundance
+             mutate(relative_mean_coverage_bin = mean_coverage_bin/total_mean_coverage_site) %>% #relative abundance measurements for each MAG at each site
+             group_by(Sample_site, Phylum) %>% #group by Sample site and Phylum
+             mutate(relative_mean_coverage_phylum = sum(relative_mean_coverage_bin)) %>% #create a total relative abundance at the phylum level
+             distinct(Sample_site, Phylum, relative_mean_coverage_phylum) %>% #filter it down to distinct phyla names to simplify data frame
+             spread(Phylum, relative_mean_coverage_phylum) %>%
+             replace(is.na(.), 0) %>% #many NAs because not all phyla occur at each site, replace with 0, these are inserted in due to the prior argument
+             as.data.frame() #make sure it is a data frame
+
+rownames(Phylum_data) <- Phylum_data$Sample_site #move sample site variable to rownames to preserve in matrix
+Phylum_data <- Phylum_data %>% select(-Sample_site) #clean up the extra column
+```
+
+3. Convert data frame to a matrix to provide the input required to generate the ordination. Use this matrix to generate the distance matrix using the Bray-Curtis dissimilarity index.
+```{r}
+Phylum_data <- as.matrix(Phylum_data)
+Phylum_matrix <- vegdist(Phylum_data, method = "bray")
+```
+
+4. Generate an non-metric multidimensional scaling analyses for the phylum rank. 
+
+**Note:** NMDS was chosen because it does not need to meet assumptions of linearity, which are difficult to resolve in compositional data. This method uses Bray-Curtis dissimilarity as an input, and so it is difficult to recover the taxa contributing to the separation between metagenomes. IMG guidelines suggest this is the most appropriate method for reducing the dimensions of metagenomic functional/taxonomic profiles.
+
+**Note**: NMDS using a random number generator, so it is important to set a consistent seed. In this case we will use the simple sequence 123. We will also turn off the transformations, although R's output window does not suggest any transformations are occurring.
+```{r}
+set.seed(123)
+Phylum_NMDS <- metaMDS(Phylum_matrix)
+```
+*Stress score output*
+- Phylum_NMDS is giving a value of 0.0263, which is lower than the recommended value of 0.2.
+
+5. Extract the NMDS score values and convert them into a tibble so they can be manipulated for visualizations in ggplot2. Join the number of distinct genomes to this data frame so it can be used in the visualization.
+```{r}
+#extract NMDS scores (x and y coordinates)
+Phylum_data_scores <- scores(Phylum_NMDS) %>%
+                      as_tibble(rownames = "Sample_site")
+
+Phylum_data_scores_distinct_genomes <- left_join(Phylum_data_scores, Distinct_genomes, by = "Sample_site")
+```
+
+6. Create plots in ggplot2 where sample_site is colour coded
+```{r}
+Phylum_ordination <- ggplot(Phylum_data_scores_distinct_genomes, aes(x = NMDS1, y = NMDS2)) + 
+                     geom_point(aes(colour = Sample_site, size = distinct_genomes))+ 
+                     theme(axis.text.y = element_text(colour = "black", size = 12, face = "bold"), 
+                     axis.text.x = element_text(colour = "black", face = "bold", size = 12), 
+                     legend.text = element_text(size = 12, face ="bold", colour ="black"), 
+                     legend.position = "right", axis.title.y = element_text(face = "bold", size = 14), 
+                     axis.title.x = element_text(face = "bold", size = 14, colour = "black"), 
+                     legend.title = element_text(size = 14, colour = "black", face = "bold"), 
+                     panel.background = element_blank(), panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+                     legend.key=element_blank()) + 
+                     labs(x = "NMDS1", y = "NMDS2", title = "NMDS for relative abundance of MAGs at the Phylum level")
+ 
+Phylum_ordination
+ggsave("Phylum_MAG_NMDS_number_distinct_genomes_per_site_2023_06_01.pdf", height=6, width=8, device="pdf", limitsize = FALSE)
+```
+## 1.2. Family level ordination
+1. Boot up the required packages to manipulate the data and generate distance matrices. Load in the output file created by DRAM that includes the product file joined to the product file that includes coverage data for each MAG.
+```{r}
+library(tidyverse)
+library(vegan)
+library(data.table)
+joint_file<-fread("FileS1_DRAM_product_connected_GTDB_taxonomy.tsv", sep = "\t", header = "auto")
+```
+
+2. Create a distance matrix at the family level to provide some high level summary data on difference between metagenomes.
+```{r}
+Family_data<-joint_file %>%
+             filter(!Sample_site == "CSWMC") %>%
+             select(Sample_site, genome, mean_coverage_bin, Family) %>%
+             group_by(Sample_site) %>%
+             mutate(total_mean_coverage_site = sum(mean_coverage_bin)) %>% #create the denominator for relative abundance
+             mutate(relative_mean_coverage_bin = mean_coverage_bin/total_mean_coverage_site) %>% #relative abundance measurements for each MAG at each site
+             group_by(Sample_site, Family) %>% #group by Sample site and Family
+             mutate(relative_mean_coverage_family = sum(relative_mean_coverage_bin)) %>% #create a total relative abundance at the family level
+             distinct(Sample_site, Family, relative_mean_coverage_family) %>% #filter it down to distinct family names to simplify data frame
+             spread(Family, relative_mean_coverage_family) %>%
+             replace(is.na(.), 0) %>% #many NAs because not all family occur at each site, replace with 0, these are inserted in due to the prior argument
+             as.data.frame()
+
+rownames(Family_data) <- Family_data$Sample_site #move sample site variable to rownames to preserve in matrix
+Family_data <- Family_data %>% select(-Sample_site) #clean up the extra column
+```
+
+3. Convert data frame to a matrix to provide the input required to generate the ordination. Use this matrix to generate the distance matrix using the Bray-Curtis dissimilarity index.
+```{r}
+Family_data <- as.matrix(Family_data)
+Family_matrix <- vegdist(Family_data, method = "bray") 
+```
+
+4. Generate an non-metric multidimensional scaling analyses for the family rank. 
+
+**Note:** NMDS was chosen because it does not need to meet assumptions of linearity, which are difficult to resolve in compositional data. This method uses Bray-Curtis dissimilarity as an input, and so it is difficult to recover the taxa contributing to the separation between metagenomes. IMG guidelines suggest this is the most appropriate method for reducing the dimensions of metagenomic functional/taxonomic profiles.
+
+**Note**: NMDS using a random number generator, so it is important to set a consistent seed. In this case we will use the simple sequence 123. We will also turn off the transformations, although R's output window does not suggest any transformations are occurring.
+```{r}
+set.seed(123)
+Family_NMDS <- metaMDS(Family_matrix)
+```
+
+5. Extract the NMDS score values and convert them into a tibble so they can be manipulated for visualizations in ggplot2.
+```{r}
+Family_data_scores <- scores(Family_NMDS) %>%
+                     as_tibble(rownames = "Sample_site")
+
+Family_data_scores_distinct_genomes <- left_join(Family_data_scores, Distinct_genomes, by = "Sample_site")
+```
+*Stress score output*
+- Family_NMDS stress value is 0.0487, which is lower than the 0.2 recommended.
+
+6. Create plots in ggplot2 where sample_site is colour coded
+```{r}
+Family_ordination <- ggplot(Family_data_scores_distinct_genomes, aes(x = NMDS1, y = NMDS2)) + 
+                     geom_point(aes(colour = Sample_site, size = distinct_genomes))+ 
+                     theme(axis.text.y = element_text(colour = "black", size = 12, face = "bold"), 
+                     axis.text.x = element_text(colour = "black", face = "bold", size = 12), 
+                     legend.text = element_text(size = 12, face ="bold", colour ="black"), 
+                     legend.position = "right", axis.title.y = element_text(face = "bold", size = 14), 
+                     axis.title.x = element_text(face = "bold", size = 14, colour = "black"), 
+                     legend.title = element_text(size = 14, colour = "black", face = "bold"), 
+                     panel.background = element_blank(), panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+                     legend.key=element_blank()) + 
+                     labs(x = "NMDS1", y = "NMDS2", title = "")
+
+Family_ordination <- Family_ordination + 
+                     guides(colour = guide_legend(title ="Sample site")) + 
+                     guides(size = guide_legend(title ="# of MAGs"))
+ 
+Family_ordination
+ggsave("Family_MAG_NMDS_number_distinct_genomes_per_site_2023_07_15.pdf", height=6, width=8, device="pdf", limitsize = FALSE)
+```
+
+# 2. Heatmaps to visualize MAG relative abundance
+Generate some heatmaps using the same relative abundance data that was used to create the ordinations to give an overview of the whole community structure across the sample sites.
+
+## 2.1. Phylum heatmaps
+1. Reload the input file and create a vector for the phyla that have relative abundance > 0.1 %. This vector will be used to filter the data down to the list of phyla with at least 0.1 % abundance at any of the sites sampled.
+```{r}
+joint_file<-fread("FileS1_DRAM_product_connected_GTDB_taxonomy.tsv", sep = "\t", header = "auto")
+
+#create list of phylum to plot
+Phylum_to_plot <- joint_file %>%
+                  select(Sample_site, genome, mean_coverage_bin, Phylum) %>%
+                  filter(!Sample_site == "CSWMC") %>% 
+                  group_by(Sample_site) %>%
+                  mutate(total_mean_coverage_site = sum(mean_coverage_bin)) %>%
+                  mutate(relative_mean_coverage_bin = mean_coverage_bin/total_mean_coverage_site) %>%
+                  group_by(Sample_site, Phylum) %>%
+                  mutate(relative_mean_coverage_phylum = sum(relative_mean_coverage_bin)*100) %>%
+                  distinct(Sample_site, Phylum, relative_mean_coverage_phylum) %>%
+                  filter(relative_mean_coverage_phylum >= 0.1)
+
+#Create vector
+Phylum_to_plot_vector <- c(Phylum_to_plot$Phylum)
+
+#Regenerate the phylum data frame
+Phylum_data <- joint_file %>%
+               filter(!Sample_site == "CSWMC") %>% #remove the water treatment plant prior to generating distance matrices
+               select(Sample_site, genome, mean_coverage_bin, Phylum) %>%
+               group_by(Sample_site) %>%
+               mutate(total_mean_coverage_site = sum(mean_coverage_bin)) %>% #create the denominator for relative abundance
+               mutate(relative_mean_coverage_bin = mean_coverage_bin/total_mean_coverage_site) %>% #relative abundance measurements for each MAG at each site
+               group_by(Sample_site, Phylum) %>% #group by Sample site and Phylum
+               mutate(relative_mean_coverage_phylum = sum(relative_mean_coverage_bin)*100) %>% #create a total relative abundance at the phylum level
+               distinct(Sample_site, Phylum, relative_mean_coverage_phylum) %>% #filter it down to distinct phyla names to simplify data frame
+               #spread(Phylum, relative_mean_coverage_phylum) %>% 
+               replace(is.na(.), 0) %>% #many NAs because not all phyla occur at each site, replace with 0, these are inserted in due to the prior argument
+               as.data.frame()
+```
+
+2. Generate the heatmap using the vector to filter the phylum list down to the phyla names that have at least 0.1 % relative abundance at one site.
+
+**Note**: As a sanity check, you can use the phylume Euryarchaota at site D2 which has a relative abundance of 0.07253733. This should still land in the data frame because this phylum has > 0.1 % abundance at the other sites.
+```{r}
+library(ggtext)
+heatmap_theme <- theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+                 panel.background = element_blank(), axis.line = element_line(colour = "black"),
+                 axis.text.x = element_text(color = "black", size = 28, face = "bold", hjust = 0.5),
+                 axis.text.y = element_markdown(color = "black", size = 24, face = "bold"),
+                 axis.title.x = element_text(color = "black", size = 30, vjust = -3, face = "bold"),
+                 axis.title.y = element_text(color = "black", size = 30, vjust = 6, face = "bold"),
+                 legend.title=element_text(size=30), 
+                 legend.text=element_text(size=28),
+                 legend.key = element_rect(fill = "white", color = NA),
+                 strip.text.x = element_text(size = 22),
+                 strip.text.y = element_text(size = 18),
+                 strip.background = element_rect(color="grey", fill = "grey", size=1.5, linetype="solid"),
+                 plot.title = element_text(size = 30, face = "bold", hjust = 0.5),
+                 panel.border = element_rect(colour = "black", fill=NA, size=1),
+                 plot.margin = unit(c(1, 6, 1, 6), "cm"))
+
+Phylum_heatmap<- Phylum_data %>%
+                 filter(Phylum %in% Phylum_to_plot_vector) %>%
+                 mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                 mutate(Phylum = str_replace(string = Phylum,
+                                             pattern = "(.*)",
+                                             replacement = "*\\1*")) %>%
+                 ggplot(aes(x= Sample_site,
+                           y = reorder(Phylum, relative_mean_coverage_phylum), fill=relative_mean_coverage_phylum)) +
+                 geom_tile(aes()) + #add the width argument here
+                 theme(axis.text.x=element_text(angle=0, hjust=1),
+                       axis.title.y = element_text(color = "black", size = 24, vjust = 0),
+                       legend.key.size = unit(2, 'cm'))+
+                 scale_fill_viridis_c(name="Rel. abundance (%)", na.value = "white") +
+                 labs(title = "Phyla with relative abundance > or equal to 0.1% in leachate from a landfill in the NE United States", 
+                      x = "Sample site" , y = "Phylum") +
+                 heatmap_theme
+
+Phylum_heatmap
+ggsave("Phylum_MAG_heatmap_over_0point1_percent_abundance_2023_06_02.pdf", height=22, width=24, device="pdf", limitsize = FALSE)
+```
+## 2.2. Family level heatmap
+1. Reload the input file and create a vector for the families that have relative abundance > 5 %. This vector will be used to filter the data down to the list of family with at least 5 % abundance at any of the sites sampled.
+```{r}
+joint_file<-fread("FileS1_DRAM_product_connected_GTDB_taxonomy.tsv", sep = "\t", header = "auto")
+
+#create list of phylum to plot
+Family_to_plot_1 <- joint_file %>%
+                  select(Sample_site, genome, mean_coverage_bin, Family) %>%
+                  filter(!Sample_site == "CSWMC") %>% 
+                  group_by(Sample_site) %>%
+                  mutate(total_mean_coverage_site = sum(mean_coverage_bin)) %>%
+                  mutate(relative_mean_coverage_bin = mean_coverage_bin/total_mean_coverage_site) %>%
+                  group_by(Sample_site, Family) %>%
+                  mutate(relative_mean_coverage_family = sum(relative_mean_coverage_bin)*100) %>%
+                  distinct(Sample_site, Family, relative_mean_coverage_family) %>%
+                  filter(relative_mean_coverage_family >= 1) %>%
+                  filter(!Family == "f__")
+
+Family_to_plot_5 <- joint_file %>%
+                  select(Sample_site, genome, mean_coverage_bin, Family) %>%
+                  filter(!Sample_site == "CSWMC") %>% 
+                  group_by(Sample_site) %>%
+                  mutate(total_mean_coverage_site = sum(mean_coverage_bin)) %>%
+                  mutate(relative_mean_coverage_bin = mean_coverage_bin/total_mean_coverage_site) %>%
+                  group_by(Sample_site, Family) %>%
+                  mutate(relative_mean_coverage_family = sum(relative_mean_coverage_bin)*100) %>%
+                  distinct(Sample_site, Family, relative_mean_coverage_family) %>%
+                  filter(relative_mean_coverage_family >= 5) %>%
+                  filter(!Family == "f__")
+
+#Create vector
+Family_to_plot_vector_1 <- c(Family_to_plot_1$Family)
+Family_to_plot_vector_5 <- c(Family_to_plot_5$Family)
+
+#Regenerate the Family data frame
+Family_data <- joint_file %>%
+               filter(!Sample_site == "CSWMC") %>% #remove the water treatment plant prior to generating distance matrices
+               select(Sample_site, genome, mean_coverage_bin, Family) %>%
+               group_by(Sample_site) %>%
+               mutate(total_mean_coverage_site = sum(mean_coverage_bin)) %>% #create the denominator for relative abundance
+               mutate(relative_mean_coverage_bin = mean_coverage_bin/total_mean_coverage_site) %>% #relative abundance measurements for each MAG at each site
+               group_by(Sample_site, Family) %>% #group by Sample site and Family
+               mutate(relative_mean_coverage_family = sum(relative_mean_coverage_bin)*100) %>% #create a total relative abundance at the Family level
+               distinct(Sample_site, Family, relative_mean_coverage_family) %>% #filter it down to distinct phyla names to simplify data frame
+               #spread(Family, relative_mean_coverage_Family) %>% 
+               replace(is.na(.), 0) %>% #many NAs because not all phyla occur at each site, replace with 0, these are inserted in due to the prior argument
+               as.data.frame()
+```
+
+2. Generate the heatmap using the vector to filter the family list down to the family names that have at least 5 % relative abundance at one site.
+
+**Note**: As a sanity check, you can use the family Methanocorpusculaceae as a sanity check. This family has a relative abundance of 6.9 at site D2 but < 5 at site F1. The data from F1 should be preserved by calling the vector.
+```{r}
+heatmap_theme <- theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+                 panel.background = element_blank(), axis.line = element_line(colour = "black"),
+                 axis.text.x = element_text(color = "black", size = 28, face = "bold", hjust = 0.5),
+                 axis.text.y = element_markdown(color = "black", size = 24, face = "bold"),
+                 axis.title.x = element_text(color = "black", size = 30, vjust = -3, face = "bold"),
+                 axis.title.y = element_text(color = "black", size = 30, vjust = 6, face = "bold"),
+                 legend.title=element_text(size=30), 
+                 legend.text=element_text(size=28),
+                 legend.key = element_rect(fill = "white", color = NA),
+                 strip.text.x = element_text(size = 22),
+                 strip.text.y = element_text(size = 18),
+                 strip.background = element_rect(color="grey", fill = "grey", size=1.5, linetype="solid"),
+                 plot.title = element_text(size = 30, face = "bold", hjust = 0.5),
+                 panel.border = element_rect(colour = "black", fill=NA, size=1),
+                 plot.margin = unit(c(1, 6, 1, 6), "cm"))
+
+Family_heatmap_1<- Family_data %>%
+                 filter(Family %in% Family_to_plot_vector_1) %>%
+                 mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                 mutate(Family = str_replace(string = Family,
+                                             pattern = "(.*)",
+                                             replacement = "*\\1*")) %>%
+                 ggplot(aes(x= Sample_site,
+                           y = reorder(Family, relative_mean_coverage_family), fill=relative_mean_coverage_family)) +
+                 geom_tile(aes()) + #add the width argument here
+                 theme(axis.text.x=element_text(angle=0, hjust=1),
+                       axis.title.y = element_text(color = "black", size = 24, vjust = 0),
+                       legend.key.size = unit(2, 'cm'))+
+                 scale_fill_viridis_c(name="Rel. abundance (%)", na.value = "white") +
+                 labs(title = "Families with relative abundance > or equal to 1% in leachate from landfill in the NE United States", 
+                      x = "Sample site" , y = "Family") +
+                 heatmap_theme
+
+Family_heatmap_1
+ggsave("Family_MAG_heatmap_over_1_percent_abundance_2023_06_01.pdf", height=26, width=24, device="pdf", limitsize = FALSE)
+
+Family_heatmap_5<- Family_data %>%
+                 filter(Family %in% Family_to_plot_vector_5) %>%
+                 mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                 mutate(Family = str_replace(string = Family,
+                                             pattern = "(.*)",
+                                             replacement = "*\\1*")) %>%
+                 ggplot(aes(x= Sample_site,
+                           y = reorder(Family, relative_mean_coverage_family), fill=relative_mean_coverage_family)) +
+                 geom_tile(aes()) + #add the width argument here
+                 theme(axis.text.x=element_text(angle=0, hjust=1),
+                       axis.title.y = element_text(color = "black", size = 24, vjust = 0),
+                       legend.key.size = unit(2, 'cm'))+
+                 scale_fill_viridis_c(name="Rel. abundance (%)", na.value = "white") +
+                 labs(title = "Families with relative abundance > or equal to 5% in leachate from a landfill in the NE United States", 
+                      x = "Sample site" , y = "Family") +
+                 heatmap_theme
+
+Family_heatmap_5
+ggsave("Family_MAG_heatmap_over_5_percent_abundance_2023_06_02.pdf", height=26, width=24, device="pdf", limitsize = FALSE)
+```
+## 2.3. Methane cycling guilds
+1. Reload the required input file to generate separate vectors for methanogen and methanotroph families using the same logical arguments used to produce the figures in the main paper.
+```{r}
+joint_file<-fread("FileS1_DRAM_product_connected_GTDB_taxonomy.tsv", sep = "\t", header = "auto")
+
+#trim to putative methanogen MAGs
+methanogens <- joint_file %>% 
+               filter(`Methanogenesis and methanotrophy: Key functional gene` == TRUE | 
+                      `Methanogenesis, CO2 => methane` >= 0.875) %>%
+               filter(!genome == "STCSWMC_52") %>% #Dysgonomanadaceae bin
+               filter(!genome == "STF2_58") %>% #Dysgonomanadaceae bin
+               filter(!genome == "STB_81") %>% #UBA148 here and for all MAGs below
+               filter(!genome == "STC_9") %>%
+               filter(!genome == "STD1_54") %>%
+               filter(!genome == "STD1_76") %>%
+               filter(!genome == "STD2_126") %>%
+               filter(!genome == "STD2_203") %>%
+               mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) #this is bracketing the names in * for markdown and preserving it in the vector
+
+#create a vector for methanogens to plot
+Methanogens_to_plot <- c(methanogens$Family)
+
+#trim to putative methanotrophs
+methanotrophs <- joint_file %>% 
+                 mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with order name
+                 filter(`Methanogenesis and methanotrophy: methane => methanol, with oxygen (pmo)` == TRUE|
+                        `Methanogenesis and methanotrophy: methane => methanol, with oxygen (mmo)` == TRUE) %>%
+                 filter(!genome == "STE_27") %>% #manually remove this genome that does not correspond to a methanotroph
+                 mutate(Order = str_replace(string = Order,
+                                            pattern = "o__",
+                                            replacement = "")) %>%
+                 mutate(Order = str_replace(string = Order,
+                                            pattern = "(.*)",
+                                            replacement = "*\\1*")) %>%
+                 mutate(Family = str_replace(string = Family,
+                                            pattern = "f__",
+                                            replacement = "")) %>%
+                 mutate(Family = str_replace(string = Family,
+                                            pattern = "(.*)",
+                                            replacement = "*\\1*")) %>%
+                 mutate(Family = str_replace(string = Family,
+                                            pattern = "\\*\\*",
+                                            replacement = Order))
+
+#create a vector for methanotrophs to plot
+Methanotrophs_to_plot <- c(methanotrophs$Family)
+```
+
+2. Plot the heatmap for the relative abundance of the methane cycling families. Include a heat map with the colour gradient scaled to the methane cycling family abundance and another scaled to the full community family abundance (i.e., family with the maximum relative abundance across all samples).
+```{r}
+#Regenerate the Family data frame
+Family_data <- joint_file %>%
+               mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                          mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                          mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                          mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                          mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to restore the matching characters and replacing blank families with order
+               filter(!Sample_site == "CSWMC") %>% #remove the water treatment plant prior to generating distance matrices
+               select(Sample_site, genome, mean_coverage_bin, Family, Order) %>% #need to keep order here to charact the characters later on
+               group_by(Sample_site) %>%
+               mutate(total_mean_coverage_site = sum(mean_coverage_bin)) %>% #create the denominator for relative abundance
+               mutate(relative_mean_coverage_bin = mean_coverage_bin/total_mean_coverage_site) %>% #relative abundance measurements for each MAG at each site
+               group_by(Sample_site, Family) %>% #group by Sample site and Family
+               mutate(relative_mean_coverage_family = sum(relative_mean_coverage_bin)*100) %>% #create a total relative abundance at the Family level
+               distinct(Sample_site, Family, relative_mean_coverage_family) %>% #filter it down to distinct phyla names to simplify data frame
+               #spread(Family, relative_mean_coverage_Family) %>% 
+               replace(is.na(.), 0) %>% #many NAs because not all phyla occur at each site, replace with 0, these are inserted in due to the prior argument
+               as.data.frame()
+
+#create a colour coding vector for the methanogens vs methanotrophs
+colour_code_names <- c(Family_data$Family %in% Methanogens_to_plot, "red")
+                
+Methane_family_heatmap <- Family_data %>%
+                          filter(Family %in% c(Methanogens_to_plot, Methanotrophs_to_plot)) %>%
+                          ggplot(aes(x= Sample_site,
+                                     y = reorder(Family, relative_mean_coverage_family), fill=relative_mean_coverage_family)) +
+                          geom_tile(aes()) + #add the width argument here
+                          theme(axis.text.x=element_text(angle=0, hjust=1),
+                               axis.title.y = element_text(color = "black", size = 24, vjust = 0),
+                               legend.key.size = unit(2, 'cm'))+
+                          scale_fill_viridis_c(name="Rel. abundance (%)", na.value = "white", limits =) +
+                          labs(title = "Methane cycling family relative abundance in leachate from a landfill in the NE United States", 
+                               x = "Sample site" , y = "Family") +
+                          heatmap_theme
+
+Methane_family_heatmap
+ggsave("Methane_family_MAG_heatmap_default_scale_2023_06_02.pdf", height=26, width=24, device="pdf", limitsize = FALSE)
+
+Methane_family_heatmap_rescaled <-  Family_data %>%
+                                    filter(Family %in% c(Methanogens_to_plot, Methanotrophs_to_plot)) %>%
+                                    ggplot(aes(x= Sample_site,
+                                               y = reorder(Family, relative_mean_coverage_family), fill=relative_mean_coverage_family)) +
+                                    geom_tile(aes()) + #add the width argument here
+                                    theme(axis.text.x=element_text(angle=0, hjust=1),
+                                         axis.title.y = element_text(color = "black", size = 24, vjust = 0),
+                                         legend.key.size = unit(2, 'cm'))+
+                                    scale_fill_viridis_c(name="Rel. abundance (%)", na.value = "white", limits = c(0, 44.3884800)) + #set to max for all families
+                                    labs(title = "Methane cycling family relative abundance in leachate from a landfill in the NE United States", 
+                                         x = "Sample site" , y = "Family") +
+                                    heatmap_theme
+
+Methane_family_heatmap_rescaled
+ggsave("Methane_family_MAG_heatmap_rescaled_2023_06_02.pdf", height=26, width=24, device="pdf", limitsize = FALSE)
+```
+# 3. DRAM output for syntrophs involved in acetate cycling
+- Focus on microbes that can supply acetate as a potential syntrophic relationship with methanogens
+- Acetogens need a separate guild to convert the acetate into something else to ensure favourable kinetics of the reaction
+- Mechanism available through DRAM product to define potential syntrophs/acetogens include:
+  - Reductive AcetylCoA pathway (Wood-Ljungdahl pathway, 7 steps to completion)
+  - Possibly the AcetylCoA, CO2 pathway (carbonic anhydrase, already considered in methanogen characterization)
+  - Could keep the complex IV information to see if they are also obligate anaerobes
+  - In the presence absence data you have:
+    - Acetate pt 1 = Acetyl-CoA synthetase
+    - Acetate pt 2 = acetate kinase
+    - Acetate pt 3 = phosphate acetyltransferase
+  - We could define the guilds based on that, but also preserve the SCFA and alcohol conversion data as well
+    - acetate pt 3 in this is actually an acetyl-CoA hydrolase, whereas pt 1 and 2 are the same as the methanogen data
+    - notably, acetyl-CoA synthetase does not seem to be captured in the SCFA data
+  - We could also consider throwing the alcohol dehydrogenase in there if need to be to make a case for supplying ethanol/methanol as a substrate
+- Would acetogens not being competing with the acetoclastic methanogens for the same substrates? This paper touches on hydrogenotrophic methanogens competing: https://www.frontiersin.org/articles/10.3389/fmicb.2019.02418/full
+  - this says you can look for fhs gene as a biomarker gene for acetogens
+- Generally the same ideas behind anaerobic digestion follow the landfill life cycle:
+  - hydrolysis (picking up from phase II)
+  - fermentation
+  - acetogenesis
+  - methanogenesis (phase III)
+- Acetogens compete directly with hydrogenotrophic methanogens for H2/CO2 substrates
+  - Looking at potential acetogens would give insight into one of the main metabolic hand offs that could occur and the potential competition between different guilds
+  - Could build this into a heatmap as well so show how acetogens fluctuate with methanogens
+- Acetogens can be divided into (based on this overview: https://www.sciencedirect.com/topics/agricultural-and-biological-sciences/acetogenesis)
+  - obligate proton reducers that produce H2 and non-obligate
+  - obligate proton reducers can only be grown in habitats where there is an efficient H2 removal system (e.g., hydrogenotrophic methanogenesis)
+    - Simplest mixed cultures is an obligate proton reducing acetogen co-cultured with a hydrogenotrophic methanogen
+    - Based on this, would expect this type of acetogen to be more abundant in older parts og the lanfills where hydrogenotrophic methanogens thrive
+- homoacetogens:
+  - hydrogen using acetogens
+  - strictly anaerobic
+  - use the acetylCoA pathway to reductively synthesize AcetylCoA from CO2, use as a TEA, cell carbon from CO2
+  - Compete with methanogens for hydrogen and formate
+  - Small organic acids produced during fermentation of butyrate, propionate are oxidized by acetogens that produce hydrogen
+  - Electrons from that process reduce protons to H2 or bicarbonate to formate
+  - Acetogens that obligate reduce protons or carbon dioxide as electron acceptors
+    - This is the WL pathway, so using this for the analysis would capture the H2 suppliers
+    - If you want to capture the methyl and the carbonyl branch, need to look at WL and CODH/ACS pathway at the same time
+      - You also need acetate kinase, which corresponds to (SCFA acetate pt 2)
+      - Phosphotranscetylase (SCFA acetate pt 1)
+      - AcetylCoA hydrolase generates CoA and acetate (pt 3) --> could plot but don't include in logical argument
+  - Propionate and butyrate are important intermediates in the fermentation
+    - Could trim dataset down to MAGs that have this to see what their distribution would be upstream of the acetate users, working from the SCFA data
+    
+Logical arguments to identify acetate cyclers:
+- WL pathway has 6/7 steps, which would be equivalent to being over 85% complete (conservative threshold)
+- The CODH/ACS data is only 2 steps, could say they need the full complement to set a conservative threshold (2/2)
+- Could also say they need both acetate pt 1 and acetate pt 2 from the SCFA portion of the graph
+- Could have another criterion where they do not have the mcrA gene to eliminate the methanogens (some families may pop up due to not having it annotated)
+  - Alternatively, could leave this information in to see if any potential methane cyclers are also carrying syntrophic machinery
+- Could iterate on this graph to see how many MAGs make the cut at each step
+
+As a first step, just plot the WL pathway to get a sense of whether competitors for hydrogenotrophic methanogens and syntrophs to acetoclastic methanogens are present and at what abundance.
+
+**Definition of acetogens**:
+- Proton reducing acetogens need to be defined by:
+  - Almost complete WL pathway AND the subsequent machinery required to generate acetate (pt 1 and pt 2)
+  - Complete CODH pathway AND the machinery required to generate aceate (pt 1 and pt 2)
+- Non obligate proton reducing acetogens only need acetate pt 1 and pt 2 to show they can go from acetylCoA to acetate
+
+1. Reload the file and apply the logical arguments to trim it down to potential acetogenic MAGs. Reload the taxonomy file as well because it will be left_joined at a later state to consolidate the data frame.
+```{r}
+#re-load File S1 if need be 
+joint_file<-fread("FileS1_DRAM_product_connected_GTDB_taxonomy.tsv", sep = "\t", header = "auto")
+
+#load the dedicated taxonomy data frame which is used to add the names back in subsequent graphing steps
+taxonomy<-fread("Methane_manuscript_GTDB_classifications", sep = "auto", header = FALSE)
+taxonomy_parsed<- separate(taxonomy, V1, into = c("genome", "Kingdom"), sep = " (?=[^ ]+$)")  #this command is to parse the character string
+taxonomy_parsed$genome<-trimws(taxonomy_parsed$genome, which = c("right")) #need to trim the white space on the right side of the bin IDs
+taxonomy_parsed<- taxonomy_parsed %>%
+  rename(Phylum = V2) %>%
+  rename(Class = V3) %>%
+  rename(Order = V4) %>%
+  rename(Family = V5) %>%
+  rename(Genus = V6) %>%
+  rename(Species = V7)
+
+taxonomy_parsed<- taxonomy_parsed %>% mutate(Sample_site = case_when(grepl("STA_", taxonomy_parsed$`genome`) ~ "A",
+                                                               grepl("STB_", taxonomy_parsed$`genome`) ~ "B",
+                                                               grepl("STC_", taxonomy_parsed$`genome`) ~ "C",
+                                                               grepl("STCSWMC_", taxonomy_parsed$`genome`) ~ "CSWMC",
+                                                               grepl("STD1_", taxonomy_parsed$`genome`)~ "D1",
+                                                               grepl("STD2_", taxonomy_parsed$`genome`)~ "D2",
+                                                               grepl("STE_", taxonomy_parsed$`genome`)~ "E",
+                                                               grepl("STF1_", taxonomy_parsed$`genome`)~ "F1",
+                                                               grepl("STF2_", taxonomy_parsed$`genome`)~ "F2"))
+
+#create the coverage summary file that will be used for bar plots down the line
+Coverage_summary_no_CSWMC<- joint_file %>%
+                   group_by(Sample_site) %>%
+                   summarize(min_coverage_site = min(mean_coverage_bin),
+                             max_coverage_site = max(mean_coverage_bin),
+                             mean_coverage_site = mean(mean_coverage_bin),
+                             median_coverage_site = median(mean_coverage_bin)) %>%
+                    filter(!Sample_site == "CSWMC")
+
+#trim to putative acetogenic MAGs
+acetogens <- joint_file %>% 
+             filter((`Reductive acetyl-CoA pathway (Wood-Ljungdahl pathway)` >=0.85 &  
+                       `SCFA and alcohol conversions: acetate, pt 1` == TRUE & 
+                       `SCFA and alcohol conversions: acetate, pt 2` == TRUE) | #methyl branch WL pathway to produce acetate this gives 0
+                      (`Acetyl-CoA pathway, CO2 => acetyl-CoA` == 1 &
+                      `SCFA and alcohol conversions: acetate, pt 1` == TRUE & 
+                       `SCFA and alcohol conversions: acetate, pt 2` == TRUE) | #Carbonyl branch WL pathway to produce acetate this brings it up to 8
+                      (`SCFA and alcohol conversions: acetate, pt 1` == TRUE & `SCFA and alcohol conversions: acetate, pt 2` == TRUE) | #this brings it up to 102
+                      `Reductive acetyl-CoA pathway (Wood-Ljungdahl pathway)` >=0.85) %>% #this brings it back up to 476
+             filter(`Methanogenesis and methanotrophy: Key functional gene` == FALSE) %>% #remove methane cyclers, this would remove Acetobacteraceae as well
+             filter(`Methanogenesis and methanotrophy: methane => methanol, with oxygen (pmo)` == FALSE &
+                    `Methanogenesis and methanotrophy: methane => methanol, with oxygen (mmo)` == FALSE) #this brings it down to 456 observations
+                  
+#create a simplified data frame to look through manually
+acetogens_simplified <-  acetogens %>%
+                         select(c(Sample_site, genome, mean_coverage_bin, Family, 
+                                  `Reductive acetyl-CoA pathway (Wood-Ljungdahl pathway)`,
+                                  `Acetyl-CoA pathway, CO2 => acetyl-CoA`,
+                                  `SCFA and alcohol conversions: Alcohol production`:`SCFA and alcohol conversions: pyruvate => acetylCoA f+ formate v3`))
+
+#take a quick look at the distinct family names showing up
+acetogen_distinct <- acetogens %>% distinct(Family)
+#100 distinct family names showing up
+```
+
+## Initial acetogen observations
+Taking a quick look at the WL pathway with 0.85 completion MAGs
+- Methanomethylophilaceae all have 85 % or more completion, I wonder what key step they're missing?
+  - All missing acetate pt 1 in the SCFA panel which is equivalent to the phosphate acetyltransferase
+- Only a handful of MAGs have 100% completion from the families f__Syntrophorhabdaceae, f__Syntrophorhabdaceae, f__Desulfosarcinaceae_B
+  - Many unnamed families 
+- Highest coverage values are generally associated with D, E, and F sites
+- in the butyrate, propionate, alcohol data frame, not a single MAG has propionate pt 1 = propionate kinase (this doesn't seem connected to AcetylCoA)
+  - Many MAGs have propionate pt 2, which is the propionate CoA transferase that could produce acetate from AcetylCoA and propanoate (presumably, many more MAGs have this as well)
+  - The machinery for butyrate seems non-pertinent here because it doesn't supply potential substrates for methanogenesis
+- If you wanted to ground the case study in pathways that could potentially supply acetate from fermentation products associated with the landfill lifecycle, you could include the propionate pt 2 because it can produce acetate from acetylCoA and propanoate
+- I am not sure how informative the alcohols are here because of their broad and dual direction use
+- I think for now, ground it in the more basic definition of acetogens and then adjust the data frame on the front end if need be
+  - From the joint_file, 81 entries are TRUE for propionate pt 2
+  - 276 MAGs are true for alcohol production
+  - This will also be difficult to collapse at the taxonomic level since these families are less tied to these functions specifically
+- Methanogen cycling families showing up:
+  - f__Methanosarcinaceae --> coming in bc of acetate pt 1 and 2, low completion of WL pathway
+  - f__Methanomethylophilaceae --> all have high completion for WL except one step, the phosphate acetyltransferase (acetate pt 1) required to convert acetyl-CoA to acetyl-P, and subsequently, acetate
+    - Notably, no MAGs have 85% completion for WL and the acetate pt 1, so I doubt we can consider them them H2 producing acetogens
+    - Some MAGs with ~71 % completion (missing 2 steps) do have the acetate pt 1, so perhaps keeping the broad definition is best
+  
+2. Create two data frames: 1) the percent_gathered that encompasses how complete metabolic pathways are and 2) the true_false_gathered that provides gene presence/absence data as shown in DRAM using the data set comprised of putative methanogenic MAGs.
+```{r}
+acetogens_percent_complete_gathered<-acetogens %>% 
+                                     gather(key = Pathway_name, value = Percent_complete, 
+                                            "3-Hydroxypropionate bi-cycle":"Complex V: V/A-type ATPase, prokaryotes", na.rm=FALSE) %>%
+                                     select(-c("CAZy: Alpha-galactans": "Sample_site")) %>% 
+                                     mutate(group = case_when(grepl("\\:.*", Pathway_name) ~ 
+                                     sub("\\:.*", "", Pathway_name),
+                                     !grepl("\\:.*", Pathway_name) ~ "Module")) %>% #maintained up to this step
+                                     mutate(Pathway_name = gsub("Complex I*:","",Pathway_name)) %>% #had to be more specific in filtering
+                                     mutate(Pathway_name = gsub("Complex IV*.*:","",Pathway_name)) %>%
+                                     mutate(Pathway_name = gsub("Complex V*.*:","",Pathway_name)) %>%
+                                     left_join(taxonomy_parsed, by = "genome") #re-add the taxonomic information here
+
+
+acetogens_true_false_gathered<- acetogens %>%
+                                gather(Pathway_name, Presence_absence,
+                                       "CAZy: Alpha-galactans":"Sulfur metabolism: thiosulfate => sulfite", na.rm = FALSE) %>%
+                                select(-c("3-Hydroxypropionate bi-cycle":"Complex V: V/A-type ATPase, prokaryotes")) %>%
+                                mutate(group = case_when(grepl("\\:.*", Pathway_name) ~ 
+                                     sub("\\:.*", "", Pathway_name))) %>%
+                                mutate(Pathway_name = gsub(".*:","",Pathway_name))
+```
+
+2. Re-define the order you want the variables to appear in for the quantitative and categorical data using the methanogen data frame. I have provided the names of facets output by DRAM with in-line comments denoted by #.
+```{r}
+#Quantitative data script
+acetogens_percent_complete_gathered$Pathway_name<-trimws(acetogens_percent_complete_gathered$Pathway_name, which = c("left")) 
+
+acetogens_percent_complete_gathered$Pathway_name = factor(acetogens_percent_complete_gathered$Pathway_name, 
+                                          levels =c(
+                                            
+                                          #Module facet
+                                            
+                                          "Glycolysis (Embden-Meyerhof pathway), glucose => pyruvate", 
+                                          "Pentose phosphate pathway (Pentose phosphate cycle)",
+                                          "Entner-Doudoroff pathway, glucose-6P => glyceraldehyde-3P + pyruvate",
+                                          "Citrate cycle (TCA cycle, Krebs cycle)",
+                                          "Glyoxylate cycle",
+                                          "Reductive pentose phosphate cycle (Calvin cycle)",
+                                          "Reductive citrate cycle (Arnon-Buchanan cycle)",
+                                          "Dicarboxylate-hydroxybutyrate cycle",
+                                          "Hydroxypropionate-hydroxybutylate cycle",
+                                          "3-Hydroxypropionate bi-cycle",
+                                          "Reductive acetyl-CoA pathway (Wood-Ljungdahl pathway)",
+                                          "Acetyl-CoA pathway, CO2 => acetyl-CoA",
+                                          "Methanogenesis, CO2 => methane",
+                                          
+                                          #Complex I
+                                          
+                                          "NADH:quinone oxidoreductase, prokaryotes",
+                                          "NAD(P)H:quinone oxidoreductase, chloroplasts and cyanobacteria",
+                                          "NADH dehydrogenase (ubiquinone) 1 alpha subcomplex",
+                                          
+                                          #Complex II
+                                          
+                                          "Succinate dehydrogenase (ubiquinone)",
+                                          "Succinate dehydrogenase, prokaryotes",
+                                          "Fumarate reductase, prokaryotes",
+                                          
+                                          #Complex III
+                                          
+                                          "Cytochrome bc1 complex respiratory unit", #what's the difference between first and second?
+                                          "Cytochrome bc1 complex",
+                                          "Cytochrome bd ubiquinol oxidase",
+                                          
+                                          #Complex IV high affinity
+                                          
+                                          #"Cytochrome bd ubiquinol oxidase", This level is being duplicated, but may not be an issue
+                                          "Cytochrome c oxidase, cbb3-type",
+                                          
+                                          #Complex IV low affinity
+                                          
+                                          "Cytochrome c oxidase",
+                                          "Cytochrome c oxidase, prokaryotes",
+                                          "Cytochrome aa3-600 menaquinol oxidase",
+                                          "Cytochrome o ubiquinol oxidase",
+                                          
+                                          #Complex V
+                                          "F-type ATPase, prokaryotes and chloroplasts",
+                                          "F-type ATPase, eukaryotes",
+                                          "V/A-type ATPase, prokaryotes",
+                                          "V-type ATPase, eukaryotes"
+                                          ))
+
+#Categorical data script
+acetogens_true_false_gathered$Pathway_name<-trimws(acetogens_true_false_gathered$Pathway_name, which = c("left")) 
+
+acetogens_true_false_gathered$Pathway_name = factor(acetogens_true_false_gathered$Pathway_name, 
+                                          levels =c(
+                                            
+                                          #CAZy facet
+                                            
+                                          "Polyphenolics", 
+                                          "Crystalline Cellulose",
+                                          "Amorphous Cellulose",
+                                          "Xyloglucan",
+                                          "Xylans",
+                                          "Alpha-mannan",
+                                          "Beta-mannan",
+                                          "Mixed-Linkage glucans",
+                                          "Starch",
+                                          "Pectin",
+                                          "Arabinan",
+                                          "Alpha-galactans",
+                                          "Beta-galactan (pectic galactan)",
+                                          "Chitin",
+                                          "Sulf-Polysachharides",
+                                          "Mucin",
+                                          "Fucose Cleavage",
+                                          "Arabinose cleavage",
+                                          "Rhamnose cleavage",
+                                          
+                                          #Nitrogen metabolism
+                                          
+                                          "ammonia => nitrite",
+                                          "Bacterial/Archaeal ammonia oxidation",
+                                          "Bacterial (aerobic-specific) ammonia oxidation",
+                                          "Bacterial (anaerobic-specific) ammonia oxidation",
+                                          "nitrite => nitrate",
+                                          "nitrate => nitrite",
+                                          "nitrite => nitric oxide",
+                                          "Dissimilatory nitrite reduction to ammonia (DNRA)",
+                                          "nitric oxide => nitrous oxide",
+                                          "nitrous oxide => nitrogen",
+                                          "nitrogen => ammonia",
+                                          "Nitrogen fixation altennative",
+                                          
+                                          #Sulfur metabolism
+                                          "dissimilatory sulfate reduction (and oxidation) sulfate => sulfide",
+                                          "thiosulfate => sulfite",
+                                          "Thiosulfate oxidation by SOX complex, thiosulfate => sulfate",
+                                          "tetrathionate => thiosulfate",
+                                          
+                                          #Other reductases
+                                          
+                                          "selenate/Chlorate reduction",
+                                          "TMAO reductase",
+                                          "mercury reduction",
+                                          "arsenate reduction, pt 1",
+                                          "arsenate reduction, pt 2",
+                                          
+                                          #Photosynthesis
+                                          "Photosystem I",
+                                          "Photosystem II",
+                                          
+                                          #Methanogenesis and methanotrophy
+                                          
+                                          "Key functional gene",
+                                          "acetate => methane, pt 1",
+                                          "acetate => methane, pt 2",
+                                          "acetate => methane, pt 3",
+                                          "methanol => methane",
+                                          "trimethylamine => dimethylamine",
+                                          "dimethylamine => monomethylamine",
+                                          "monomethylamine => ammonia",
+                                          "putative but not defining CO2 => methane",
+                                          "methane => methanol, with oxygen (pmo)",
+                                          "methane => methanol, with oxygen (mmo)",
+                                          
+                                          #SCFA and alcohol conversions
+                                          "pyruvate => acetyl CoA v1",
+                                          "pyruvate => acetyl CoA v2",
+                                          "pyruvate => acetylCoA f+ formate v3",
+                                          "acetate, pt 1",
+                                          "acetate, pt 2",
+                                          "acetate, pt 3",
+                                          "lactate L",
+                                          "lactate D",
+                                          "Butyrate, pt 1",
+                                          "Butyrate, pt 2",
+                                          "Propionate, pt 1",
+                                          "Propionate, pt 2",
+                                          "Alcohol production"
+                                          ))
+```
+
+3. Combine the *acetogens_percent_complete_gathered* and *acetogens_true_false_gathered* data frames to re-create DRAM's output, focusing on the most salient data for methanogenesis.
+```{r}
+library(tidyverse)
+library(ggtext)
+library(patchwork)
+library(glue)
+
+heatmap_theme<- theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+               panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.text.x = element_text(color = "black", size = 14),
+               axis.text.y = element_text(color = "black", size = 14),
+               axis.title.x = element_text(color = "black", size = 16, vjust = -3),
+               axis.title.y = element_text(color = "black", size = 16, vjust = 6),
+               legend.title=element_text(size=16), 
+               legend.text=element_text(size=14),
+               legend.key = element_rect(fill = "white", color = NA),
+               plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+               panel.border = element_rect(colour = "black", fill=NA, size=1),
+               plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+acetogens_percent_complete_gathered$Sample_site = factor(acetogens_percent_complete_gathered$Sample_site, 
+                                          levels =c("A", "B", "C", "D1", "D2", "E","F1", "F2","CSWMC")) #orders sites that will act as rows in facet
+
+
+acetogens_percent_complete_heatmap_pathways_refined<- acetogens_percent_complete_gathered %>%
+                    filter(!Sample_site == "CSWMC") %>%
+                    filter(Pathway_name == "Acetyl-CoA pathway, CO2 => acetyl-CoA" | 
+                           Pathway_name == "Reductive acetyl-CoA pathway (Wood-Ljungdahl pathway)" |
+                           Pathway_name == "Cytochrome bd ubiquinol oxidase" |
+                           Pathway_name == "Cytochrome c oxidase, cbb3-type" |
+                           Pathway_name == "Cytochrome aa3-600 menaquinol oxidase" |
+                           Pathway_name == "Cytochrome c oxidase" |
+                           Pathway_name == "Cytochrome c oxidase, prokaryotes" |
+                           Pathway_name == "Cytochrome o ubiquinol oxidase"
+                           ) %>%
+                     filter(!group == "Complex III") %>%
+                    #reformat the names so they are better for presentation purposes, making sure to start with order
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                     mutate(Class = str_replace(string = Class,
+                                            pattern = "\\*\\*",
+                                            replacement = Phylum)) %>%
+                          
+                          mutate(Order = str_replace(string = Order,
+                                            pattern = "\\*\\*",
+                                            replacement = Class)) %>%
+  
+                          mutate(Family = str_replace(string = Family,
+                                            pattern = "\\*\\*",
+                                            replacement = Order)) %>%
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    mutate(Phylum_family_bin = as.factor(Phylum_family_bin)) %>%
+                    mutate(Pathway_name = recode(Pathway_name, #recode to meaningful names
+                                                 'Acetyl-CoA pathway, CO2 => acetyl-CoA' = "CODH/ACS complex", 
+                                                 'Methanogenesis, CO2 => methane' = "Hydrogenotrophic methanogenesis")) %>%
+                    ggplot(aes(x=Pathway_name, y = reorder(Phylum_family_bin, mean_coverage_bin), 
+                               fill=Percent_complete, na.rm = TRUE))+
+                    geom_tile(aes())+
+                    facet_grid(Sample_site ~ group, 
+                               scales = "free", space = "free", labeller = labeller(group = label_wrap_gen(10))) +
+                    theme(axis.text.x=element_text(angle=90, hjust=1)) +
+                    scale_fill_distiller(palette = "YlGnBu", trans = "reverse", limits = c(1,0))+
+                    labs(title = "", x = "", y = "", fill = "% complete") +
+                    heatmap_theme +
+                    theme(
+                          legend.position = c(0.4, 1.05), legend.direction = "vertical", #set legend position coordinates here
+                          legend.key.height= unit(4, 'cm'), legend.key.width = unit(2,"cm"),
+                          legend.text = element_text(size = 34),
+                          legend.title = element_text(size = 34),
+                          strip.background = element_blank(), 
+                          strip.text.y = element_blank(), 
+                          strip.text.x = element_blank(),
+                          axis.text.x = element_text(color = "black", size = 32),
+                          axis.text.y = element_markdown(size = 12, face = "bold"),
+                          plot.margin=margin(0,0,0,0)) +
+                    guides(guide_colorbar(reverse = TRUE))
+
+
+#recode the TRUE/FALSE data to presence absence
+acetogens_true_false_gathered<-acetogens_true_false_gathered %>% 
+                               mutate(Presence_absence = as.factor(Presence_absence)) %>%
+                               mutate(Presence_absence = recode(Presence_absence, 'TRUE' = "Present", 'FALSE' = "Absent"))
+
+#re-organize the order in which you want to present the landfill cells
+acetogens_true_false_gathered$Sample_site = factor(acetogens_true_false_gathered$Sample_site, 
+                                          levels =c("A", "B", "C", "D1", "D2", "E","F1", "F2","CSWMC")) #orders sites that will act as rows in facet
+
+#edit the group variable to present them in the proper order for methanogen-centric data
+acetogens_true_false_gathered$group = factor(acetogens_true_false_gathered$group, 
+                                          levels =c("Methanogenesis and methanotrophy", "CAZy", "SCFA and alcohol conversions", 
+                                                    "Nitrogen metabolism", "Sulfur metabolism", "Other Reductases","Photosynthesis")) #order facets
+
+acetogens_true_false_heatmap_pathways_refined<- acetogens_true_false_gathered %>%
+                    filter(!Sample_site == "CSWMC") %>%
+                    filter(#group == "Methanogenesis and methanotrophy" | 
+                           group == "SCFA and alcohol conversions" |
+                           group == "Complex IV High Affinity" |
+                           group == "Complex IV Low Affinity" |
+                           group == "Nitrogen metabolism" |
+                           group == "Sulfur metabolism") %>%
+                    #filter(!Pathway_name == "methane => methanol, with oxygen (mmo)" & 
+                           #!Pathway_name == "methane => methanol, with oxygen (pmo)" &
+                           #!Pathway_name == "putative but not defining CO2 => methane") %>% #remove non-pertinent data
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+  
+                     mutate(Class = str_replace(string = Class,
+                                            pattern = "\\*\\*",
+                                            replacement = Phylum)) %>%
+                          
+                          mutate(Order = str_replace(string = Order,
+                                            pattern = "\\*\\*",
+                                            replacement = Class)) %>%
+  
+                          mutate(Family = str_replace(string = Family,
+                                            pattern = "\\*\\*",
+                                            replacement = Order)) %>%
+  
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    mutate(Phylum_family_bin = as.factor(Phylum_family_bin)) %>%
+                    mutate(Pathway_name = recode(Pathway_name, 
+                                                 'Key functional gene' = "*mcrA* gene")) %>%
+                    ggplot(aes(x=Pathway_name, y = reorder(Phylum_family_bin, mean_coverage_bin), fill=Presence_absence))+
+                    geom_tile(aes())+
+                    facet_grid(Sample_site ~ group, scales = "free", space = "free") +
+                    theme(axis.text.x=element_text(angle=90, hjust=1)) +
+                    scale_fill_manual(values = c("#CCFFFF", "#009933"))+ 
+                    labs(title = "", x = "", y = "", fill = "Function") +
+                    heatmap_theme +
+                    theme(plot.title = element_text(hjust = 0.7, vjust = -1), 
+                          legend.position = c(0.5, 1.05), legend.direction = "vertical", #set legend position coordinates here
+                          legend.key.height= unit(4, 'cm'), legend.key.width = unit(2,"cm"),
+                          legend.text = element_text(size = 34),
+                          legend.title = element_text(size = 34),
+                          strip.background = element_blank(), 
+                          strip.text.y = element_blank(), 
+                          strip.text.x = element_blank(),
+                          axis.text.x = element_markdown(size = 32, color = "black"),
+                          axis.text.y = element_blank(),
+                          axis.ticks.y = element_blank(),
+                          plot.margin=margin(0,0,0,0))
+
+acetogens_coverage_heatmap<- acetogens_true_false_gathered %>%
+                    filter(!Sample_site == "CSWMC") %>%
+                    distinct(genome, .keep_all = TRUE) %>% #need to add this or it will sum repeated coverage values
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with their order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+  
+                     mutate(Class = str_replace(string = Class,
+                                            pattern = "\\*\\*",
+                                            replacement = Phylum)) %>%
+                          
+                          mutate(Order = str_replace(string = Order,
+                                            pattern = "\\*\\*",
+                                            replacement = Class)) %>%
+  
+                          mutate(Family = str_replace(string = Family,
+                                            pattern = "\\*\\*",
+                                            replacement = Order)) %>%
+  
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    ggplot(aes(x = reorder(Phylum_family_bin, mean_coverage_bin), y = log10(mean_coverage_bin))) +
+                    geom_bar(stat = "identity", aes(fill = log10(mean_coverage_bin))) + #add the width argument here
+                    facet_grid(rows = vars(Sample_site), scale = "free", space = 'free') +
+                    geom_hline(data = Coverage_summary_no_CSWMC, aes(yintercept=log10(mean_coverage_site)), size = 2) +
+                    geom_hline(data = Coverage_summary_no_CSWMC, aes(yintercept=log10(median_coverage_site)), linetype="dashed", size=2) +
+                    scale_fill_distiller(palette = "Reds", trans = "reverse")+
+                    scale_y_continuous(limits = c(0, log10(857.19452))) + # max coverage for bins in dataset
+                    scale_x_discrete(position = "top") +
+                    coord_flip()+
+                    labs(title = "log10(mean coverage)", 
+                         x = "" , y = "") +
+                    heatmap_theme +
+                    theme(plot.title = element_text(hjust = 0.5, vjust = -1050, size = 30),
+                    legend.position = "none", panel.background = element_blank(), axis.line = element_line(colour = "black"),       
+                    axis.title.x  = element_blank(), 
+                    axis.text.x = element_text(color = "black", size = 32, vjust = -1),
+                    axis.text.y = element_blank(),
+                    axis.ticks.y = element_blank(),
+                    strip.text.y = element_text(size = 40),
+                    strip.text.x = element_text(size = 40))
+
+acetogens_coverage_heatmap
+
+#combine the heatmaps with the coverage data
+acetogens_combined_plot_pathways_refined<-acetogens_percent_complete_heatmap_pathways_refined + 
+                                            acetogens_true_false_heatmap_pathways_refined +
+                                            acetogens_coverage_heatmap +
+                                            plot_layout(ncol = 3, nrow = 1, widths = c(0.1, 0.4, 0.3), guides = "collect")
+
+ggsave("Acetogen_metabolism_and_coverage_2023_06_03.pdf", height=100, width=50, device="pdf", limitsize = FALSE)
+```
+## Observations on initial heatmap
+- Plotting 456 MAGs is not practical
+- High completion WL pathway MAGs are low in #, < 10% of MAGs making the cut
+- High completion WL pathway never has a complete Complex IV high affinity, only 2 MAGs have a complete low affinity complex IV
+- 40 MAGs have high completion for WL > 71%, but only 8 have the full machinery required to produce acetate. No MAGs have > 85% completion and the capacity to produce acetate
+- 444 MAGs are below the 85% cutoff, 436 are below the 71% cutoff. These all made it through on the basis of acetate pt 1 and pt 2
+  - This would suggest that non proton reducing acetogens occur more frequently
+- Based on the heatmap, high completion for the WL pathway MAGs are never near the top abundance
+  - They do occur more in B, are vitually absent in C, occur more frequently in D1, less so D2 and E, a bit more in F1, not so much F2
+    - These are very heterogeneous
+    - Occurence in older landfills cells could result in competition with hydrogenotrophic methanogens but also supply acetate from ample organic carbon
+- MAGs with fairly complete high affinity complex IV tend to occur more in cells A and C, with some additiona low affinity complex IV occurin in A, B, C. E has a similar distribution to C. MAGs with high completion for high affinity complex IV are never WL users. 
+- All MAGS with 100 on CODH have no complex IV either (10 entries)
+- Capacity to reduce nitrogen and sulphate in acetogenic data frame is widespread, albeit more concentrated in A, B, C
+
+- Flow for interpreting these results
+  - Break down relative abundance at first and compare to methane cycling guilds
+    - Can do with heatmap
+    - Individual coverage data largely follows methanogen trends except:
+      - C, where potential acetogens are quite abundant
+      - E, where potential acetogens are quite abundant
+  - Discuss the distribution of almost complete WL pathway relative to redox, touching on distribution of complex IV
+    - No WL high completion MAGs have high affinity or low affinity complex IV except for a handful, suggesting they are obligate anaerobes
+    - Touch on how 0 have the actual full completion pathway to make acetate
+  - Discuss CODH/ACS completion as well, but this would need to be included on the front end
+    - No CODH/ACS has a complete complex IV
+    - Most have the full machinery required to make acetate
+  - Discuss distribution of acetate pt 1 and pt 2, which would not need to reduce protons and compete for H2 to create acetate as long as they have acetyl-CoA
+    - Many more MAGs fall into this group
+    - Potentially coupled to aerobic and microaerophilic metabolism, many have both high affinity and low affinity machinery
+    - Also potential to use many alternative electron acceptors to drive this reaction
+      - Can't distinguish between direction of WL in this data e.g. coupled to sulfate reduction and acetate oxidation
+  - In general, the systems tends to look more like one that can supply acetate without a lot of competition for hydrogen, suggesting methanogens are likely one of the main H2 sinks across the landfill. Acetogens may also be a means of keeping oxygen low or serve as a marker for oxygen infiltration into the system
+  - Many more pathways that could lead to the production to produce acetylCoA including pyruvate and propionate, which are available here
+  - This aligns with the more favourable conditions for methanogenesis to access H2 as a potential electron donor
+  - Acetoclastic methanogens would have the added benefit of consuming acetate produced by acetogens
+  - We cannot distinguish whether acetogens growing on other organic carbon sources are supplying reducing equivalents as H2 to hydrogenotrophic methanogens or acetate directly to acetoclastic methanogens
+
+4. Try to produce a heatmap to show the relative abundance of potential acetogenic families. One major caveat here, is that these families are not defined by their metabolic capacity as much as the methanogens and methanotrophs, so named for their specific methane metabolisms. Be mindful that only the acetogenic MAGs are being included here and that you're not collapsing the entire family name across the dataset. May need to use a %in% argument to make sure you're calling the proper data.
+```{r}
+#reload heatmap theme for editing
+heatmap_theme <- theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+                 panel.background = element_blank(), axis.line = element_line(colour = "black"),
+                 axis.text.x = element_text(color = "black", size = 28, face = "bold", hjust = 0.5),
+                 axis.text.y = element_markdown(color = "black", size = 24, face = "bold"),
+                 axis.title.x = element_text(color = "black", size = 30, vjust = -3, face = "bold"),
+                 axis.title.y = element_text(color = "black", size = 30, vjust = 6, face = "bold"),
+                 legend.title=element_text(size=30), 
+                 legend.text=element_text(size=28),
+                 legend.key = element_rect(fill = "white", color = NA),
+                 strip.text.x = element_text(size = 22),
+                 strip.text.y = element_text(size = 18),
+                 strip.background = element_rect(color="grey", fill = "grey", size=1.5, linetype="solid"),
+                 plot.title = element_text(size = 30, face = "bold", hjust = 0.5),
+                 panel.border = element_rect(colour = "black", fill=NA, size=1),
+                 plot.margin = unit(c(1, 6, 1, 6), "cm"))
+
+#Generate a data frame that contains acetogens with family names and relative abundance
+Acetogen_family_data <- joint_file %>%
+                        #fix names here
+                        
+                         mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                          mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                         mutate(Class = str_replace(string = Class,
+                                                pattern = "c__",
+                                                replacement = "")) %>%
+                          mutate(Class = str_replace(string = Class,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                         mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                          mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                          mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                          mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+  
+                          mutate(Class = str_replace(string = Class,
+                                            pattern = "\\*\\*",
+                                            replacement = Phylum)) %>%
+                          
+                          mutate(Order = str_replace(string = Order,
+                                            pattern = "\\*\\*",
+                                            replacement = Class)) %>%
+  
+                          mutate(Family = str_replace(string = Family,
+                                            pattern = "\\*\\*",
+                                            replacement = Order)) %>%
+  
+               filter(!Sample_site == "CSWMC") %>% #remove the water treatment plant prior to generating distance matrices
+               #select(Sample_site, genome, mean_coverage_bin, Family) %>%
+               group_by(Sample_site) %>%
+               mutate(total_mean_coverage_site = sum(mean_coverage_bin)) %>% #create the denominator for relative abundance
+               mutate(relative_mean_coverage_bin = mean_coverage_bin/total_mean_coverage_site) %>% 
+  
+               filter(genome %in% acetogens$genome) %>% #filter it down to the proper genome IDs fro acetogenic dataset prior to collapsing at Family level
+               
+               group_by(Sample_site, Family) %>% #group by Sample site and Family
+               mutate(relative_mean_coverage_family = sum(relative_mean_coverage_bin)*100) %>% #create a total relative abundance at the Family level
+               distinct(Sample_site, Family, relative_mean_coverage_family) %>% #filter it down to distinct phyla names to simplify data frame
+               #spread(Family, relative_mean_coverage_Family) %>% 
+               replace(is.na(.), 0) %>% #many NAs because not all phyla occur at each site, replace with 0, these are inserted in due to the prior argument
+               as.data.frame()
+
+Mean_acetogen_family <- Acetogen_family_data %>% summarise(mean = mean(relative_mean_coverage_family)) #mean is ~ 1%
+
+#make the heatmap
+Acetogen_family_heatmap <- Acetogen_family_data %>%
+                           ggplot(aes(x= Sample_site,
+                                     y = reorder(Family, relative_mean_coverage_family), fill=relative_mean_coverage_family)) +
+                           geom_tile(aes()) + #add the width argument here
+                           theme(axis.text.x=element_text(angle=0, hjust=1),
+                               axis.title.y = element_text(color = "black", size = 24, vjust = 0),
+                               legend.key.size = unit(2, 'cm'))+
+                           scale_fill_viridis_c(name="Rel. abundance (%)", na.value = "white", limits =) +
+                           labs(title = "Acetogen family relative abundance in leachate from a landfill in the NE United States", 
+                               x = "Sample site" , y = "Family") +
+                           heatmap_theme
+
+Acetogen_family_heatmap
+ggsave("Acetogen_family_MAG_heatmap_default_scale_2023_06_07.pdf", height=36, width=24, device="pdf", limitsize = FALSE)
+```
+- Range of relative abundance reported go from 0.045 % to 43 %
+- The vast majority are < 1% relative abundance
+- Ignoring the most abundant family, driven solely by the relative abundance of a two bins STC_123 and STC_124 from the same genera and family, most other acetogen families are < 20
+  - These bins from Acrobacteraceae are from the no WL or CODH/ACS group of acetogens
+- Could collapse to genera level and have an abundance cutoff but I think that is getting into the weeds here
+
+# 5. Reproduce DRAM heatmaps for methanogens, methanotrophs, and acetogens with relative abundance instead of coverage
+1. Reload File S1 and calculate relative abundance for individual MAGs in each landfill cell.
+```{r}
+joint_file<-fread("FileS1_DRAM_product_connected_GTDB_taxonomy.tsv", sep = "\t", header = "auto")
+joint_file <- joint_file %>%
+              group_by(Sample_site) %>%
+              mutate(total_mean_coverage_site = sum(mean_coverage_bin)) %>% #create the denominator for relative abundance
+              mutate(relative_mean_coverage_bin = (mean_coverage_bin/total_mean_coverage_site)*100)
+write.table(joint_file, file = "FileS1_DRAM_product_connected_GTDB_taxonomy_relative_abundance.tsv", sep ='\t', row.names = FALSE)
+```
+
+2. Create the summary files data frames that normally use coverage data using relative abundance data. 
+```{r}
+#load the dedicated taxonomy data frame which is used to add the names back in subsequent graphing steps
+taxonomy<-fread("Methane_manuscript_GTDB_classifications", sep = "auto", header = FALSE)
+taxonomy_parsed<- separate(taxonomy, V1, into = c("genome", "Kingdom"), sep = " (?=[^ ]+$)")  #this command is to parse the character string
+taxonomy_parsed$genome<-trimws(taxonomy_parsed$genome, which = c("right")) #need to trim the white space on the right side of the bin IDs
+taxonomy_parsed<- taxonomy_parsed %>%
+  rename(Phylum = V2) %>%
+  rename(Class = V3) %>%
+  rename(Order = V4) %>%
+  rename(Family = V5) %>%
+  rename(Genus = V6) %>%
+  rename(Species = V7)
+
+taxonomy_parsed<- taxonomy_parsed %>% mutate(Sample_site = case_when(grepl("STA_", taxonomy_parsed$`genome`) ~ "A",
+                                                               grepl("STB_", taxonomy_parsed$`genome`) ~ "B",
+                                                               grepl("STC_", taxonomy_parsed$`genome`) ~ "C",
+                                                               grepl("STCSWMC_", taxonomy_parsed$`genome`) ~ "CSWMC",
+                                                               grepl("STD1_", taxonomy_parsed$`genome`)~ "D1",
+                                                               grepl("STD2_", taxonomy_parsed$`genome`)~ "D2",
+                                                               grepl("STE_", taxonomy_parsed$`genome`)~ "E",
+                                                               grepl("STF1_", taxonomy_parsed$`genome`)~ "F1",
+                                                               grepl("STF2_", taxonomy_parsed$`genome`)~ "F2")) %>%
+                  select(-Sample_site) #remove so this doesn't get duplicated again when gathering data in downstream steps
+
+#create the coverage summary file that will be used for bar plots down the line
+Coverage_summary_no_CSWMC<- joint_file %>%
+                   group_by(Sample_site) %>%
+                   summarize(min_coverage_site = min(relative_mean_coverage_bin),
+                             max_coverage_site = max(relative_mean_coverage_bin),
+                             mean_coverage_site = mean(relative_mean_coverage_bin),
+                             median_coverage_site = median(relative_mean_coverage_bin)) %>%
+                    filter(!Sample_site == "CSWMC")
+```
+
+## 5.1 Methanogens
+1. Generate the methanogen data frame again using the new joint file with the relative abundance data.
+```{r}
+methanogens <- joint_file %>% 
+               filter(`Methanogenesis and methanotrophy: Key functional gene` == TRUE | 
+                      `Methanogenesis, CO2 => methane` >= 0.875) %>%
+               filter(!genome == "STCSWMC_52") %>% #Dysgonomanadaceae bin
+               filter(!genome == "STF2_58") %>% #Dysgonomanadaceae bin
+               filter(!genome == "STB_81") %>% #UBA148 here and for all MAGs below
+               filter(!genome == "STC_9") %>%
+               filter(!genome == "STD1_54") %>%
+               filter(!genome == "STD1_76") %>%
+               filter(!genome == "STD2_126") %>%
+               filter(!genome == "STD2_203")
+```
+
+2. Create two data frames: 1_ the percent_gathered that encompasses how complete metabolic pathways are and 2) the true_false_gathered that provides gene presence/absence data as shown in DRAM using the data set comprised of putative methanogenic MAGs.
+```{r}
+methanogens_percent_complete_gathered<-methanogens %>% 
+                           gather(key = Pathway_name, value = Percent_complete, 
+                                  "3-Hydroxypropionate bi-cycle":"Complex V: V/A-type ATPase, prokaryotes", na.rm=FALSE) %>%
+                           select(-c("CAZy: Alpha-galactans": "Sample_site")) %>% 
+                           mutate(group = case_when(grepl("\\:.*", Pathway_name) ~ 
+                           sub("\\:.*", "", Pathway_name),
+                           !grepl("\\:.*", Pathway_name) ~ "Module")) %>% #maintained up to this step
+                           mutate(Pathway_name = gsub("Complex I*:","",Pathway_name)) %>% #had to be more specific in filtering
+                           mutate(Pathway_name = gsub("Complex IV*.*:","",Pathway_name)) %>%
+                           mutate(Pathway_name = gsub("Complex V*.*:","",Pathway_name)) %>%
+                           left_join(taxonomy_parsed, by = "genome") #re-add the taxonomic information here
+
+
+methanogens_true_false_gathered<- methanogens %>%
+                      gather(Pathway_name, Presence_absence,
+                             "CAZy: Alpha-galactans":"Sulfur metabolism: thiosulfate => sulfite", na.rm = FALSE) %>%
+                      select(-c("3-Hydroxypropionate bi-cycle":"Complex V: V/A-type ATPase, prokaryotes")) %>%
+                      mutate(group = case_when(grepl("\\:.*", Pathway_name) ~ 
+                           sub("\\:.*", "", Pathway_name))) %>%
+                      mutate(Pathway_name = gsub(".*:","",Pathway_name))
+```
+
+3. Re-define the order you want the variables to appear in for the quantitative and categorical data using the methanogen data frame. I have provided the names of facets output by DRAM with in-line comments denoted by #.
+```{r}
+#Quantitative data script
+methanogens_percent_complete_gathered$Pathway_name<-trimws(methanogens_percent_complete_gathered$Pathway_name, which = c("left")) 
+
+methanogens_percent_complete_gathered$Pathway_name = factor(methanogens_percent_complete_gathered$Pathway_name, 
+                                          levels =c(
+                                            
+                                          #Module facet
+                                            
+                                          "Glycolysis (Embden-Meyerhof pathway), glucose => pyruvate", 
+                                          "Pentose phosphate pathway (Pentose phosphate cycle)",
+                                          "Entner-Doudoroff pathway, glucose-6P => glyceraldehyde-3P + pyruvate",
+                                          "Citrate cycle (TCA cycle, Krebs cycle)",
+                                          "Glyoxylate cycle",
+                                          "Reductive pentose phosphate cycle (Calvin cycle)",
+                                          "Reductive citrate cycle (Arnon-Buchanan cycle)",
+                                          "Dicarboxylate-hydroxybutyrate cycle",
+                                          "Hydroxypropionate-hydroxybutylate cycle",
+                                          "3-Hydroxypropionate bi-cycle",
+                                          "Reductive acetyl-CoA pathway (Wood-Ljungdahl pathway)",
+                                          "Acetyl-CoA pathway, CO2 => acetyl-CoA",
+                                          "Methanogenesis, CO2 => methane",
+                                          
+                                          #Complex I
+                                          
+                                          "NADH:quinone oxidoreductase, prokaryotes",
+                                          "NAD(P)H:quinone oxidoreductase, chloroplasts and cyanobacteria",
+                                          "NADH dehydrogenase (ubiquinone) 1 alpha subcomplex",
+                                          
+                                          #Complex II
+                                          
+                                          "Succinate dehydrogenase (ubiquinone)",
+                                          "Succinate dehydrogenase, prokaryotes",
+                                          "Fumarate reductase, prokaryotes",
+                                          
+                                          #Complex III
+                                          
+                                          "Cytochrome bc1 complex respiratory unit", #what's the difference between first and second?
+                                          "Cytochrome bc1 complex",
+                                          "Cytochrome bd ubiquinol oxidase",
+                                          
+                                          #Complex IV high affinity
+                                          
+                                          #"Cytochrome bd ubiquinol oxidase", This level is being duplicated, but may not be an issue
+                                          "Cytochrome c oxidase, cbb3-type",
+                                          
+                                          #Complex IV low affinity
+                                          
+                                          "Cytochrome c oxidase",
+                                          "Cytochrome c oxidase, prokaryotes",
+                                          "Cytochrome aa3-600 menaquinol oxidase",
+                                          "Cytochrome o ubiquinol oxidase",
+                                          
+                                          #Complex V
+                                          "F-type ATPase, prokaryotes and chloroplasts",
+                                          "F-type ATPase, eukaryotes",
+                                          "V/A-type ATPase, prokaryotes",
+                                          "V-type ATPase, eukaryotes"
+                                          ))
+
+#Categorical data script
+methanogens_true_false_gathered$Pathway_name<-trimws(methanogens_true_false_gathered$Pathway_name, which = c("left")) 
+
+methanogens_true_false_gathered$Pathway_name = factor(methanogens_true_false_gathered$Pathway_name, 
+                                          levels =c(
+                                            
+                                          #CAZy facet
+                                            
+                                          "Polyphenolics", 
+                                          "Crystalline Cellulose",
+                                          "Amorphous Cellulose",
+                                          "Xyloglucan",
+                                          "Xylans",
+                                          "Alpha-mannan",
+                                          "Beta-mannan",
+                                          "Mixed-Linkage glucans",
+                                          "Starch",
+                                          "Pectin",
+                                          "Arabinan",
+                                          "Alpha-galactans",
+                                          "Beta-galactan (pectic galactan)",
+                                          "Chitin",
+                                          "Sulf-Polysachharides",
+                                          "Mucin",
+                                          "Fucose Cleavage",
+                                          "Arabinose cleavage",
+                                          "Rhamnose cleavage",
+                                          
+                                          #Nitrogen metabolism
+                                          
+                                          "ammonia => nitrite",
+                                          "Bacterial/Archaeal ammonia oxidation",
+                                          "Bacterial (aerobic-specific) ammonia oxidation",
+                                          "Bacterial (anaerobic-specific) ammonia oxidation",
+                                          "nitrite => nitrate",
+                                          "nitrate => nitrite",
+                                          "nitrite => nitric oxide",
+                                          "Dissimilatory nitrite reduction to ammonia (DNRA)",
+                                          "nitric oxide => nitrous oxide",
+                                          "nitrous oxide => nitrogen",
+                                          "nitrogen => ammonia",
+                                          "Nitrogen fixation altennative",
+                                          
+                                          #Sulfur metabolism
+                                          "dissimilatory sulfate reduction (and oxidation) sulfate => sulfide",
+                                          "thiosulfate => sulfite",
+                                          "Thiosulfate oxidation by SOX complex, thiosulfate => sulfate",
+                                          "tetrathionate => thiosulfate",
+                                          
+                                          #Other reductases
+                                          
+                                          "selenate/Chlorate reduction",
+                                          "TMAO reductase",
+                                          "mercury reduction",
+                                          "arsenate reduction, pt 1",
+                                          "arsenate reduction, pt 2",
+                                          
+                                          #Photosynthesis
+                                          "Photosystem I",
+                                          "Photosystem II",
+                                          
+                                          #Methanogenesis and methanotrophy
+                                          
+                                          "Key functional gene",
+                                          "acetate => methane, pt 1",
+                                          "acetate => methane, pt 2",
+                                          "acetate => methane, pt 3",
+                                          "methanol => methane",
+                                          "trimethylamine => dimethylamine",
+                                          "dimethylamine => monomethylamine",
+                                          "monomethylamine => ammonia",
+                                          "putative but not defining CO2 => methane",
+                                          "methane => methanol, with oxygen (pmo)",
+                                          "methane => methanol, with oxygen (mmo)",
+                                          
+                                          #SCFA and alcohol conversions
+                                          "pyruvate => acetyl CoA v1",
+                                          "pyruvate => acetyl CoA v2",
+                                          "pyruvate => acetylCoA f+ formate v3",
+                                          "acetate, pt 1",
+                                          "acetate, pt 2",
+                                          "acetate, pt 3",
+                                          "lactate L",
+                                          "lactate D",
+                                          "Butyrate, pt 1",
+                                          "Butyrate, pt 2",
+                                          "Propionate, pt 1",
+                                          "Propionate, pt 2",
+                                          "Alcohol production"
+                                          ))
+```
+
+4. Combine the *methanogens_percent_complete_gathered* and *methanogens_true_false_gathered* data frames to re-create DRAM's output, focusing on the most salient data for methanogenesis.
+```{r}
+library(tidyverse)
+library(ggtext)
+library(patchwork)
+library(glue)
+
+heatmap_theme<- theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+               panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.text.x = element_text(color = "black", size = 14),
+               axis.text.y = element_text(color = "black", size = 14),
+               axis.title.x = element_text(color = "black", size = 16, vjust = -3),
+               axis.title.y = element_text(color = "black", size = 16, vjust = 6),
+               legend.title=element_text(size=16), 
+               legend.text=element_text(size=14),
+               legend.key = element_rect(fill = "white", color = NA),
+               plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+               panel.border = element_rect(colour = "black", fill=NA, size=1),
+               plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+methanogens_percent_complete_gathered$Sample_site = factor(methanogens_percent_complete_gathered$Sample_site, 
+                                          levels =c("A", "B", "C", "D1", "D2", "E","F1", "F2","CSWMC")) #orders sites that will act as rows in facet
+
+
+methanogens_percent_complete_heatmap_pathways_refined<- methanogens_percent_complete_gathered %>%
+                    filter(!Sample_site == "CSWMC") %>%
+                    filter(Pathway_name == "Acetyl-CoA pathway, CO2 => acetyl-CoA" | 
+                           Pathway_name == "Methanogenesis, CO2 => methane") %>%
+                    #reformat the names so they are better for presentation purposes, making sure to start with order
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    mutate(Phylum_family_bin = as.factor(Phylum_family_bin)) %>%
+                    mutate(Pathway_name = recode(Pathway_name, #recode to meaningful names
+                                                 'Acetyl-CoA pathway, CO2 => acetyl-CoA' = "CODH/ACS complex", 
+                                                 'Methanogenesis, CO2 => methane' = "Hydrogenotrophic methanogenesis")) %>%
+                    ggplot(aes(x=Pathway_name, y = reorder(Phylum_family_bin, relative_mean_coverage_bin), #changed to relative abundance
+                               fill=Percent_complete, na.rm = TRUE))+
+                    geom_tile(aes())+
+                    facet_grid(Sample_site ~ group, 
+                               scales = "free", space = "free", labeller = labeller(group = label_wrap_gen(10))) +
+                    theme(axis.text.x=element_text(angle=90, hjust=1)) +
+                    scale_fill_distiller(palette = "YlGnBu", trans = "reverse", limits = c(1,0))+
+                    labs(title = "", x = "", y = "", fill = "% complete") +
+                    heatmap_theme +
+                    theme(
+                          legend.position = c(0.4, 1.05), legend.direction = "vertical", #set legend position coordinates here
+                          legend.key.height= unit(4, 'cm'), legend.key.width = unit(2,"cm"),
+                          legend.text = element_text(size = 34),
+                          legend.title = element_text(size = 34),
+                          strip.background = element_blank(), 
+                          strip.text.y = element_blank(), 
+                          strip.text.x = element_blank(),
+                          axis.text.x = element_text(color = "black", size = 32),
+                          axis.text.y = element_markdown(size = 32, face = "bold"),
+                          plot.margin=margin(0,0,0,0)) +
+                    guides(guide_colorbar(reverse = TRUE))
+
+
+#recode the TRUE/FALSe data to presence absence
+methanogens_true_false_gathered<-methanogens_true_false_gathered %>% 
+                                 mutate(Presence_absence = as.factor(Presence_absence)) %>%
+                                 mutate(Presence_absence = recode(Presence_absence, 'TRUE' = "Present", 'FALSE' = "Absent"))
+
+#re-organize the order in which you want to present the landfill cells
+methanogens_true_false_gathered$Sample_site = factor(methanogens_true_false_gathered$Sample_site, 
+                                          levels =c("A", "B", "C", "D1", "D2", "E","F1", "F2","CSWMC")) #orders sites that will act as rows in facet
+
+#edit the group variable to present them in the proper order for methanogen-centric data
+methanogens_true_false_gathered$group = factor(methanogens_true_false_gathered$group, 
+                                          levels =c("Methanogenesis and methanotrophy", "CAZy", "SCFA and alcohol conversions", 
+                                                    "Nitrogen metabolism", "Sulfur metabolism", "Other Reductases","Photosynthesis")) #order facets
+
+methanogens_true_false_heatmap_pathways_refined<- methanogens_true_false_gathered %>%
+                    filter(!Sample_site == "CSWMC") %>%
+                    filter(group == "Methanogenesis and methanotrophy") %>%
+                    filter(!Pathway_name == "methane => methanol, with oxygen (mmo)" & 
+                           !Pathway_name == "methane => methanol, with oxygen (pmo)" &
+                           !Pathway_name == "putative but not defining CO2 => methane") %>% #remove non-pertinent data
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    mutate(Phylum_family_bin = as.factor(Phylum_family_bin)) %>%
+                    mutate(Pathway_name = recode(Pathway_name, 
+                                                 'Key functional gene' = "*mcrA* gene")) %>%
+                    ggplot(aes(x=Pathway_name, y = reorder(Phylum_family_bin, relative_mean_coverage_bin), fill=Presence_absence))+ #changed to relative abundance
+                    geom_tile(aes())+
+                    facet_grid(Sample_site ~ group, scales = "free", space = "free") +
+                    theme(axis.text.x=element_text(angle=90, hjust=1)) +
+                    scale_fill_manual(values = c("#CCFFFF", "#009933"))+ 
+                    labs(title = "", x = "", y = "", fill = "Function") +
+                    heatmap_theme +
+                    theme(plot.title = element_text(hjust = 0.7, vjust = -1), 
+                          legend.position = c(0.5, 1.05), legend.direction = "vertical", #set legend position coordinates here
+                          legend.key.height= unit(4, 'cm'), legend.key.width = unit(2,"cm"),
+                          legend.text = element_text(size = 34),
+                          legend.title = element_text(size = 34),
+                          strip.background = element_blank(), 
+                          strip.text.y = element_blank(), 
+                          strip.text.x = element_blank(),
+                          axis.text.x = element_markdown(size = 32, color = "black"),
+                          axis.text.y = element_blank(),
+                          axis.ticks.y = element_blank(),
+                          plot.margin=margin(0,0,0,0))
+
+methanogens_coverage_heatmap<- methanogens_true_false_gathered %>%
+                    filter(!Sample_site == "CSWMC") %>%
+                    distinct(genome, .keep_all = TRUE) %>% #need to add this or it will sum repeated coverage values
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with their order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    ggplot(aes(x = reorder(Phylum_family_bin, relative_mean_coverage_bin), y = relative_mean_coverage_bin)) + #chanaged to relative abundance and removed log10
+                    geom_bar(stat = "identity", aes(fill = log10(mean_coverage_bin))) + #add the width argument here
+                    facet_grid(rows = vars(Sample_site), scale = "free", space = 'free') +
+                    geom_hline(data = Coverage_summary_no_CSWMC, aes(yintercept=mean_coverage_site), size = 2) +
+                    geom_hline(data = Coverage_summary_no_CSWMC, aes(yintercept=median_coverage_site), linetype="dashed", size=2) +
+                    scale_fill_distiller(palette = "Reds", trans = "reverse")+
+                    scale_y_continuous(limits = c(0, 30)) + # max relative abundance across entire methane cycling guild data set with some extra room
+                    scale_x_discrete(position = "top") +
+                    coord_flip()+
+                    labs(title = "Relative abundance (%)", 
+                         x = "" , y = "") +
+                    heatmap_theme +
+                    theme(plot.title = element_text(hjust = 0.5, vjust = -475, size = 30),
+                    legend.position = "none", panel.background = element_blank(), axis.line = element_line(colour = "black"),       
+                    axis.title.x  = element_blank(), 
+                    axis.text.x = element_text(color = "black", size = 32, vjust = -1),
+                    axis.text.y = element_blank(),
+                    axis.ticks.y = element_blank(),
+                    strip.text.y = element_text(size = 40),
+                    strip.text.x = element_text(size = 40))
+
+methanogens_coverage_heatmap
+
+#combine the heatmaps with the coverage data
+methanogens_combined_plot_pathways_refined<-methanogens_percent_complete_heatmap_pathways_refined + 
+                                            methanogens_true_false_heatmap_pathways_refined +
+                                            methanogens_coverage_heatmap +
+                                            plot_layout(ncol = 3, nrow = 1, widths = c(0.1, 0.4, 0.3), guides = "collect")
+
+ggsave("Fig3_Methanogen_metabolism_and_relative_abundance.pdf", height=50, width=35, device="pdf", limitsize = FALSE)
+```
+5. Repeat the figure but scale it to the max abundance of methanogens. 
+```{r}
+library(tidyverse)
+library(ggtext)
+library(patchwork)
+library(glue)
+
+heatmap_theme<- theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+               panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.text.x = element_text(color = "black", size = 14),
+               axis.text.y = element_text(color = "black", size = 14),
+               axis.title.x = element_text(color = "black", size = 16, vjust = -3),
+               axis.title.y = element_text(color = "black", size = 16, vjust = 6),
+               legend.title=element_text(size=16), 
+               legend.text=element_text(size=14),
+               legend.key = element_rect(fill = "white", color = NA),
+               plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+               panel.border = element_rect(colour = "black", fill=NA, size=1),
+               plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+methanogens_percent_complete_gathered$Sample_site = factor(methanogens_percent_complete_gathered$Sample_site, 
+                                          levels =c("A", "B", "C", "D1", "D2", "E","F1", "F2","CSWMC")) #orders sites that will act as rows in facet
+
+
+methanogens_percent_complete_heatmap_pathways_refined<- methanogens_percent_complete_gathered %>%
+                    filter(!Sample_site == "CSWMC") %>%
+                    filter(Pathway_name == "Acetyl-CoA pathway, CO2 => acetyl-CoA" | 
+                           Pathway_name == "Methanogenesis, CO2 => methane") %>%
+                    #reformat the names so they are better for presentation purposes, making sure to start with order
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    mutate(Phylum_family_bin = as.factor(Phylum_family_bin)) %>%
+                    mutate(Pathway_name = recode(Pathway_name, #recode to meaningful names
+                                                 'Acetyl-CoA pathway, CO2 => acetyl-CoA' = "CODH/ACS complex", 
+                                                 'Methanogenesis, CO2 => methane' = "Hydrogenotrophic methanogenesis")) %>%
+                    ggplot(aes(x=Pathway_name, y = reorder(Phylum_family_bin, relative_mean_coverage_bin), #changed to relative abundance
+                               fill=Percent_complete, na.rm = TRUE))+
+                    geom_tile(aes())+
+                    facet_grid(Sample_site ~ group, 
+                               scales = "free", space = "free", labeller = labeller(group = label_wrap_gen(10))) +
+                    theme(axis.text.x=element_text(angle=90, hjust=1)) +
+                    scale_fill_distiller(palette = "YlGnBu", trans = "reverse", limits = c(1,0))+
+                    labs(title = "", x = "", y = "", fill = "% complete") +
+                    heatmap_theme +
+                    theme(
+                          legend.position = c(0.4, 1.05), legend.direction = "vertical", #set legend position coordinates here
+                          legend.key.height= unit(4, 'cm'), legend.key.width = unit(2,"cm"),
+                          legend.text = element_text(size = 34),
+                          legend.title = element_text(size = 34),
+                          strip.background = element_blank(), 
+                          strip.text.y = element_blank(), 
+                          strip.text.x = element_blank(),
+                          axis.text.x = element_text(color = "black", size = 32),
+                          axis.text.y = element_markdown(size = 32, face = "bold"),
+                          plot.margin=margin(0,0,0,0)) +
+                    guides(guide_colorbar(reverse = TRUE))
+
+
+#recode the TRUE/FALSe data to presence absence
+methanogens_true_false_gathered<-methanogens_true_false_gathered %>% 
+                                 mutate(Presence_absence = as.factor(Presence_absence)) %>%
+                                 mutate(Presence_absence = recode(Presence_absence, 'TRUE' = "Present", 'FALSE' = "Absent"))
+
+#re-organize the order in which you want to present the landfill cells
+methanogens_true_false_gathered$Sample_site = factor(methanogens_true_false_gathered$Sample_site, 
+                                          levels =c("A", "B", "C", "D1", "D2", "E","F1", "F2","CSWMC")) #orders sites that will act as rows in facet
+
+#edit the group variable to present them in the proper order for methanogen-centric data
+methanogens_true_false_gathered$group = factor(methanogens_true_false_gathered$group, 
+                                          levels =c("Methanogenesis and methanotrophy", "CAZy", "SCFA and alcohol conversions", 
+                                                    "Nitrogen metabolism", "Sulfur metabolism", "Other Reductases","Photosynthesis")) #order facets
+
+methanogens_true_false_heatmap_pathways_refined<- methanogens_true_false_gathered %>%
+                    filter(!Sample_site == "CSWMC") %>%
+                    filter(group == "Methanogenesis and methanotrophy") %>%
+                    filter(!Pathway_name == "methane => methanol, with oxygen (mmo)" & 
+                           !Pathway_name == "methane => methanol, with oxygen (pmo)" &
+                           !Pathway_name == "putative but not defining CO2 => methane") %>% #remove non-pertinent data
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    mutate(Phylum_family_bin = as.factor(Phylum_family_bin)) %>%
+                    mutate(Pathway_name = recode(Pathway_name, 
+                                                 'Key functional gene' = "*mcrA* gene")) %>%
+                    ggplot(aes(x=Pathway_name, y = reorder(Phylum_family_bin, relative_mean_coverage_bin), fill=Presence_absence))+ #changed to relative abundance
+                    geom_tile(aes())+
+                    facet_grid(Sample_site ~ group, scales = "free", space = "free") +
+                    theme(axis.text.x=element_text(angle=90, hjust=1)) +
+                    scale_fill_manual(values = c("#CCFFFF", "#009933"))+ 
+                    labs(title = "", x = "", y = "", fill = "Function") +
+                    heatmap_theme +
+                    theme(plot.title = element_text(hjust = 0.7, vjust = -1), 
+                          legend.position = c(0.5, 1.05), legend.direction = "vertical", #set legend position coordinates here
+                          legend.key.height= unit(4, 'cm'), legend.key.width = unit(2,"cm"),
+                          legend.text = element_text(size = 34),
+                          legend.title = element_text(size = 34),
+                          strip.background = element_blank(), 
+                          strip.text.y = element_blank(), 
+                          strip.text.x = element_blank(),
+                          axis.text.x = element_markdown(size = 32, color = "black"),
+                          axis.text.y = element_blank(),
+                          axis.ticks.y = element_blank(),
+                          plot.margin=margin(0,0,0,0))
+
+methanogens_coverage_heatmap<- methanogens_true_false_gathered %>%
+                    filter(!Sample_site == "CSWMC") %>%
+                    distinct(genome, .keep_all = TRUE) %>% #need to add this or it will sum repeated coverage values
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with their order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    ggplot(aes(x = reorder(Phylum_family_bin, relative_mean_coverage_bin), y = relative_mean_coverage_bin)) + #chanaged to relative abundance and removed log10
+                    geom_bar(stat = "identity", aes(fill = log10(mean_coverage_bin))) + #add the width argument here
+                    facet_grid(rows = vars(Sample_site), scale = "free", space = 'free') +
+                    geom_hline(data = Coverage_summary_no_CSWMC, aes(yintercept=mean_coverage_site), size = 2) +
+                    geom_hline(data = Coverage_summary_no_CSWMC, aes(yintercept=median_coverage_site), linetype="dashed", size=2) +
+                    scale_fill_distiller(palette = "Reds", trans = "reverse")+
+                    scale_y_continuous(limits = c(0, 8)) + # max relative abundance across entire methane cycling guild data set with some extra room
+                    scale_x_discrete(position = "top") +
+                    coord_flip()+
+                    labs(title = "Relative abundance (%)", 
+                         x = "" , y = "") +
+                    heatmap_theme +
+                    theme(plot.title = element_text(hjust = 0.5, vjust = -475, size = 30),
+                    legend.position = "none", panel.background = element_blank(), axis.line = element_line(colour = "black"),       
+                    axis.title.x  = element_blank(), 
+                    axis.text.x = element_text(color = "black", size = 32, vjust = -1),
+                    axis.text.y = element_blank(),
+                    axis.ticks.y = element_blank(),
+                    strip.text.y = element_text(size = 40),
+                    strip.text.x = element_text(size = 40))
+
+methanogens_coverage_heatmap
+
+#combine the heatmaps with the coverage data
+methanogens_combined_plot_pathways_refined<-methanogens_percent_complete_heatmap_pathways_refined + 
+                                            methanogens_true_false_heatmap_pathways_refined +
+                                            methanogens_coverage_heatmap +
+                                            plot_layout(ncol = 3, nrow = 1, widths = c(0.1, 0.4, 0.3), guides = "collect")
+
+ggsave("Fig3_Methanogen_metabolism_and_relative_abundance_rescaled.pdf", height=50, width=35, device="pdf", limitsize = FALSE)
+```
+## 5.2 Methanotrophs
+
+1. Regenerate the methanotrophs data frame from the joint file containing relative abundance data.
+```{r}
+methanotrophs <- joint_file %>% 
+               filter(`Methanogenesis and methanotrophy: methane => methanol, with oxygen (pmo)` == TRUE|
+                       `Methanogenesis and methanotrophy: methane => methanol, with oxygen (mmo)` == TRUE)
+#create dedicated dataframe for methanotroph data or the lines will not overlay in the coverage bar plot properly
+#remove all sites where no methanotroph MAGs were recovered
+Coverage_summary_methanotrophs<- Coverage_summary_no_CSWMC %>% filter(!Sample_site == "D2" & !Sample_site == "F1" & !Sample_site == "F2")
+```
+
+2. Re-create the percent_gathered and true_falste gathered data frames as was done for the methanogens, but this time use the methanotroph data as the input.
+```{r}
+methanotrophs_percent_complete_gathered<-methanotrophs %>% 
+                           gather(key = Pathway_name, value = Percent_complete, 
+                                  "3-Hydroxypropionate bi-cycle":"Complex V: V/A-type ATPase, prokaryotes", na.rm=FALSE) %>%
+                           select(-c("CAZy: Alpha-galactans": "Sample_site")) %>% 
+                           mutate(group = case_when(grepl("\\:.*", Pathway_name) ~ 
+                           sub("\\:.*", "", Pathway_name),
+                           !grepl("\\:.*", Pathway_name) ~ "Module")) %>% #maintained up to this step
+                           mutate(Pathway_name = gsub("Complex I*:","",Pathway_name)) %>% #had to be more specific in filtering
+                           mutate(Pathway_name = gsub("Complex IV*.*:","",Pathway_name)) %>%
+                           mutate(Pathway_name = gsub("Complex V*.*:","",Pathway_name)) %>%
+                           left_join(taxonomy_parsed, by = "genome") #re-add the taxonomic information here
+
+methanotrophs_true_false_gathered<- methanotrophs %>%
+                      gather(Pathway_name, Presence_absence,
+                             "CAZy: Alpha-galactans":"Sulfur metabolism: thiosulfate => sulfite", na.rm = FALSE) %>%
+                      select(-c("3-Hydroxypropionate bi-cycle":"Complex V: V/A-type ATPase, prokaryotes")) %>%
+                      mutate(group = case_when(grepl("\\:.*", Pathway_name) ~ 
+                           sub("\\:.*", "", Pathway_name))) %>%
+                      mutate(Pathway_name = gsub(".*:","",Pathway_name))
+```
+
+3. Add the re-ordering arguments for the facets and trim white space from the 'Pathway_name' variable.
+```{r}
+#numeric data
+methanotrophs_percent_complete_gathered$Pathway_name<-trimws(methanotrophs_percent_complete_gathered$Pathway_name, which = c("left")) 
+
+methanotrophs_percent_complete_gathered$Pathway_name = factor(methanotrophs_percent_complete_gathered$Pathway_name, 
+                                          levels =c(
+                                            
+                                          #Module facet
+                                            
+                                          "Glycolysis (Embden-Meyerhof pathway), glucose => pyruvate", 
+                                          "Pentose phosphate pathway (Pentose phosphate cycle)",
+                                          "Entner-Doudoroff pathway, glucose-6P => glyceraldehyde-3P + pyruvate",
+                                          "Citrate cycle (TCA cycle, Krebs cycle)",
+                                          "Glyoxylate cycle",
+                                          "Reductive pentose phosphate cycle (Calvin cycle)",
+                                          "Reductive citrate cycle (Arnon-Buchanan cycle)",
+                                          "Dicarboxylate-hydroxybutyrate cycle",
+                                          "Hydroxypropionate-hydroxybutylate cycle",
+                                          "3-Hydroxypropionate bi-cycle",
+                                          "Reductive acetyl-CoA pathway (Wood-Ljungdahl pathway)",
+                                          "Acetyl-CoA pathway, CO2 => acetyl-CoA",
+                                          "Methanogenesis, CO2 => methane",
+                                          
+                                          #Complex I
+                                          
+                                          "NADH:quinone oxidoreductase, prokaryotes",
+                                          "NAD(P)H:quinone oxidoreductase, chloroplasts and cyanobacteria",
+                                          "NADH dehydrogenase (ubiquinone) 1 alpha subcomplex",
+                                          
+                                          #Complex II
+                                          
+                                          "Succinate dehydrogenase (ubiquinone)",
+                                          "Succinate dehydrogenase, prokaryotes",
+                                          "Fumarate reductase, prokaryotes",
+                                          
+                                          #Complex III
+                                          
+                                          "Cytochrome bc1 complex respiratory unit", #what's the difference between first and second?
+                                          "Cytochrome bc1 complex",
+                                          "Cytochrome bd ubiquinol oxidase",
+                                          
+                                          #Complex IV high affinity
+                                          
+                                          #"Cytochrome bd ubiquinol oxidase", This level is being duplicated, but may not be an issue
+                                          "Cytochrome c oxidase, cbb3-type",
+                                          
+                                          #Complex IV low affinity
+                                          
+                                          "Cytochrome c oxidase",
+                                          "Cytochrome c oxidase, prokaryotes",
+                                          "Cytochrome aa3-600 menaquinol oxidase",
+                                          "Cytochrome o ubiquinol oxidase",
+                                          
+                                          #Complex V
+                                          "F-type ATPase, prokaryotes and chloroplasts",
+                                          "F-type ATPase, eukaryotes",
+                                          "V/A-type ATPase, prokaryotes",
+                                          "V-type ATPase, eukaryotes"
+                                          ))
+
+#categorical data
+methanotrophs_true_false_gathered$Pathway_name<-trimws(methanotrophs_true_false_gathered$Pathway_name, which = c("left")) 
+
+methanotrophs_true_false_gathered$Pathway_name = factor(methanotrophs_true_false_gathered$Pathway_name, 
+                                          levels =c(
+                                            
+                                          #CAZy facet
+                                            
+                                          "Polyphenolics", 
+                                          "Crystalline Cellulose",
+                                          "Amorphous Cellulose",
+                                          "Xyloglucan",
+                                          "Xylans",
+                                          "Alpha-mannan",
+                                          "Beta-mannan",
+                                          "Mixed-Linkage glucans",
+                                          "Starch",
+                                          "Pectin",
+                                          "Arabinan",
+                                          "Alpha-galactans",
+                                          "Beta-galactan (pectic galactan)",
+                                          "Chitin",
+                                          "Sulf-Polysachharides",
+                                          "Mucin",
+                                          "Fucose Cleavage",
+                                          "Arabinose cleavage",
+                                          "Rhamnose cleavage",
+                                          
+                                          #Nitrogen metabolism
+                                          
+                                          "ammonia => nitrite",
+                                          "Bacterial/Archaeal ammonia oxidation",
+                                          "Bacterial (aerobic-specific) ammonia oxidation",
+                                          "Bacterial (anaerobic-specific) ammonia oxidation",
+                                          "nitrite => nitrate",
+                                          "nitrate => nitrite",
+                                          "nitrite => nitric oxide",
+                                          "Dissimilatory nitrite reduction to ammonia (DNRA)",
+                                          "nitric oxide => nitrous oxide",
+                                          "nitrous oxide => nitrogen",
+                                          "nitrogen => ammonia",
+                                          "Nitrogen fixation altennative",
+                                          
+                                          #Sulfur metabolism
+                                          "dissimilatory sulfate reduction (and oxidation) sulfate => sulfide",
+                                          "thiosulfate => sulfite",
+                                          "Thiosulfate oxidation by SOX complex, thiosulfate => sulfate",
+                                          "tetrathionate => thiosulfate",
+                                          
+                                          #Other reductases
+                                          
+                                          "selenate/Chlorate reduction",
+                                          "TMAO reductase",
+                                          "mercury reduction",
+                                          "arsenate reduction, pt 1",
+                                          "arsenate reduction, pt 2",
+                                          
+                                          #Photosynthesis
+                                          "Photosystem I",
+                                          "Photosystem II",
+                                          
+                                          #Methanogenesis and methanotrophy
+                                          
+                                          "Key functional gene",
+                                          "acetate => methane, pt 1",
+                                          "acetate => methane, pt 2",
+                                          "acetate => methane, pt 3",
+                                          "methanol => methane",
+                                          "trimethylamine => dimethylamine",
+                                          "dimethylamine => monomethylamine",
+                                          "monomethylamine => ammonia",
+                                          "putative but not defining CO2 => methane",
+                                          "methane => methanol, with oxygen (pmo)",
+                                          "methane => methanol, with oxygen (mmo)",
+                                          
+                                          #SCFA and alcohol conversions
+                                          "pyruvate => acetyl CoA v1",
+                                          "pyruvate => acetyl CoA v2",
+                                          "pyruvate => acetylCoA f+ formate v3",
+                                          "acetate, pt 1",
+                                          "acetate, pt 2",
+                                          "acetate, pt 3",
+                                          "lactate L",
+                                          "lactate D",
+                                          "Butyrate, pt 1",
+                                          "Butyrate, pt 2",
+                                          "Propionate, pt 1",
+                                          "Propionate, pt 2",
+                                          "Alcohol production"
+                                          ))
+```
+
+5. Create a figure that focuses on the electron transporting and accepting capabilities of putative methanotrophic MAGs.
+```{r}
+library(tidyverse)
+library(ggtext)
+library(patchwork)
+library(glue)
+
+heatmap_theme<- theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+               panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.text.x = element_text(color = "black", size = 14),
+               axis.text.y = element_text(color = "black", size = 14),
+               axis.title.x = element_text(color = "black", size = 16, vjust = -3),
+               axis.title.y = element_text(color = "black", size = 16, vjust = 6),
+               legend.title=element_text(size=16), 
+               legend.text=element_text(size=14),
+               legend.key = element_rect(fill = "white", color = NA),
+               plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+               panel.border = element_rect(colour = "black", fill=NA, size=1),
+               plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+methanotrophs_percent_complete_gathered$Sample_site = factor(methanotrophs_percent_complete_gathered$Sample_site, 
+                                          levels =c("A", "B", "C", "D1", "D2", "E","F1", "F2","CSWMC")) #orders sites that will act as rows in facet
+
+#edit the group variable to account for long names
+methanotrophs_percent_complete_gathered$group = factor(methanotrophs_percent_complete_gathered$group, 
+                                          levels =c("Module", "Complex I", "Complex II", "Complex III", 
+                                                    "Complex IV High affinity", "Complex IV Low affinity","Complex V")) #order the facets
+                                                                
+
+methanotrophs_percent_complete_heatmap<- methanotrophs_percent_complete_gathered %>%
+                    filter(group == "Complex IV High affinity" |
+                           group == "Complex IV Low affinity") %>% #this is the additional filtration step
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with their order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    mutate(Phylum_family_bin = as.factor(Phylum_family_bin)) %>%
+                    filter(!group == "Module") %>% #filter down to ETC data only
+                    filter(!genome == "STE_27") %>%
+                    ggplot(aes(x=Pathway_name, y = reorder(Phylum_family_bin, relative_mean_coverage_bin), 
+                               fill=Percent_complete, na.rm = TRUE))+
+                    geom_tile(aes())+
+                    facet_grid(Sample_site ~ group, 
+                               scales = "free", space = "free", labeller = labeller(group = label_wrap_gen(10))) +
+                    theme(axis.text.x=element_text(angle=90, hjust=1)) +
+                    scale_fill_distiller(palette = "YlGnBu", trans = "reverse", limits = c(1,0))+
+                    labs(title = "", x = "", y = "", fill = "% complete") +
+                    heatmap_theme +
+                    theme(legend.position = "right", legend.direction = "vertical", #set legend position coordinates here
+                          legend.key.height= unit(4, 'cm'), legend.key.width = unit(2,"cm"),
+                          legend.text = element_text(size = 34),
+                          legend.title = element_text(size = 34),
+                          strip.background = element_blank(), 
+                          strip.text.y = element_blank(), 
+                          strip.text.x = element_text(size = 34),
+                          axis.text.x = element_text(color = "black", size = 32),
+                          axis.text.y = element_markdown(size = 32, face = "bold"),
+                          plot.margin=margin(0,0,0,0)) +
+                    guides(guide_colorbar(reverse = TRUE))
+
+#recode the TRUE/FALSE data to presence absence
+methanotrophs_true_false_gathered<-methanotrophs_true_false_gathered %>% 
+                                 mutate(Presence_absence = as.factor(Presence_absence)) %>%
+                                 mutate(Presence_absence = recode(Presence_absence, 'TRUE' = "Present", 'FALSE' = "Absent"))
+
+#re-organize the order in which you want to present the landfill cells
+methanotrophs_true_false_gathered$Sample_site = factor(methanotrophs_true_false_gathered$Sample_site, 
+                                          levels =c("A", "B", "C", "D1", "D2", "E","F1", "F2","CSWMC")) #orders sites that will act as rows in facet
+
+#edit the group variable to present them in the proper order for methanogen-centric data
+methanotrophs_true_false_gathered$group = factor(methanotrophs_true_false_gathered$group, 
+                                          levels =c("Methanogenesis and methanotrophy", "CAZy", "SCFA and alcohol conversions", 
+                                                    "Nitrogen metabolism", "Sulfur metabolism", "Other Reductases","Photosynthesis")) #order facets
+
+#put the full order in, just in case you want to present the full suite of data
+                                                                
+
+methanotrophs_true_false_heatmap<- methanotrophs_true_false_gathered %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    mutate(Phylum_family_bin = as.factor(Phylum_family_bin)) %>%
+                    mutate(Pathway_name = recode(Pathway_name, 
+                                                 'methane => methanol, with oxygen (pmo)' = "*pmoA* gene",
+                                                 'methane => methanol, with oxygen (mmo)' = "*mmoX* gene")) %>%
+                    filter(group == "Methanogenesis and methanotrophy" |
+                           group == "Nitrogen metabolism" |
+                           group == "Sulfur metabolism") %>%
+                    filter(!Pathway_name == "Key functional gene" &
+                           !Pathway_name == "acetate => methane, pt 1" &
+                           !Pathway_name == "acetate => methane, pt 2" &
+                           !Pathway_name == "acetate => methane, pt 3" &
+                           !Pathway_name == "dimethylamine => monomethylamine" &
+                           !Pathway_name == "dimethylamine => monomethylamine" &
+                           !Pathway_name == "methanol => methane" & 
+                           !Pathway_name == "monomethylamine => ammonia" &
+                           !Pathway_name == "putative but not defining CO2 => methane" &
+                           !Pathway_name == "trimethylamine => dimethylamine") %>%
+                    filter(!genome == "STE_27") %>%
+                    ggplot(aes(x=Pathway_name, y = reorder(Phylum_family_bin, relative_mean_coverage_bin), fill=Presence_absence))+
+                    geom_tile(aes())+
+                    facet_grid(Sample_site ~ group, scales = "free", 
+                               space = "free", labeller = labeller(group = label_wrap_gen(10))) +
+                    theme(axis.text.x=element_text(angle=90, hjust=1)) +
+                    scale_fill_manual(values = c("#CCFFFF", "#009933"))+ 
+                    labs(title = "", x = "", y = "", fill = "Function") +
+                    heatmap_theme +
+                    theme(plot.title = element_text(hjust = 0.7, vjust = -1), 
+                          legend.position = "right", legend.direction = "vertical", #set legend position coordinates here
+                          legend.key.height= unit(4, 'cm'), legend.key.width = unit(2,"cm"),
+                          legend.text = element_text(size = 34),
+                          legend.title = element_text(size = 34),
+                          strip.background = element_blank(), 
+                          strip.text.y = element_blank(), 
+                          strip.text.x = element_text(size = 34),
+                          axis.text.x = element_markdown(size = 32, color = "black"),
+                          axis.text.y = element_blank(),
+                          axis.ticks.y = element_blank(),
+                          plot.margin=margin(0,0,0,0))
+
+#coverage data for putative methanotrophs
+methanotrophs_coverage_heatmap<- methanotrophs_true_false_gathered %>%
+                    filter(Sample_site == "A"|
+                           Sample_site == "B" |
+                           Sample_site == "C" |
+                           Sample_site == "D1"|
+                           Sample_site == "E") %>%
+                    filter(!genome == "STE_27") %>%
+                    distinct(genome, .keep_all = TRUE) %>% #need to add this or it will sum repeated coverage values
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    mutate(Phylum_family_bin = as.factor(Phylum_family_bin)) %>%
+                    ggplot(aes(x = reorder(Phylum_family_bin, relative_mean_coverage_bin), y = relative_mean_coverage_bin)) +
+                    geom_bar(stat = "identity", aes(fill = relative_mean_coverage_bin)) + #add the width argument here
+                    facet_grid(rows = vars(Sample_site), scale = "free", space = 'free') +
+                    geom_hline(data = Coverage_summary_methanotrophs, aes(yintercept= mean_coverage_site), size = 2) +
+                    geom_hline(data = Coverage_summary_methanotrophs, aes(yintercept=median_coverage_site), linetype="dashed", size=2) +
+                    scale_fill_distiller(palette = "Reds", trans = "reverse")+
+                    scale_y_continuous(limits = c(0, 8)) + # max relative abundance for methane cycling guilds with a bit of room
+                    scale_x_discrete(position = "top") +
+                    coord_flip() +
+                    labs(title = "Relative abundance (%)", 
+                         x = "" , y = "") +
+                    heatmap_theme +
+                    theme(plot.title = element_text(hjust = 0.5, vjust = -280, size = 30),
+                    legend.position = "none", panel.background = element_blank(), axis.line = element_line(colour = "black"),       
+                    axis.title.x  = element_blank(), 
+                    axis.text.x = element_text(color = "black", size = 32, vjust = -1),
+                    axis.text.y = element_blank(),
+                    axis.ticks.y = element_blank(),
+                    strip.text.y = element_text(size = 40),
+                    strip.text.x = element_text(size = 40))
+
+methanotrophs_coverage_heatmap
+
+methanotrophs_combined_plot<-methanotrophs_percent_complete_heatmap + 
+                             methanotrophs_true_false_heatmap +
+                             (methanotrophs_coverage_heatmap + theme(legend.position = "none")) +
+                             #plot_layout(guides = 'keep') +
+                             plot_layout(ncol = 3, nrow = 1, widths = c(0.1, 0.2, 0.05)) +
+                             plot_layout(guides = "collect") +
+                             plot_annotation(title = "Methanotrophic redox metabolism capacity in a landfill in the NE US",
+                                             theme = theme(plot.title = element_text(size = 44, hjust = 0.5, face = "bold")))
+                
+
+methanotrophs_combined_plot #let's take a quick look even if it is too big to get a sense if everything combined properly
+
+ggsave("Fig5_Methanotrophs_redox_metabolism_relative_abundance.pdf", height=36, width=66, device="pdf", limitsize = FALSE)
+```
+## 5.3 Acetogens
+1. Recreate the acetogen data frame using the joint_file with relative abundance.
+```{r}
+acetogens <- joint_file %>% 
+             filter((`Reductive acetyl-CoA pathway (Wood-Ljungdahl pathway)` >=0.85 &  
+                       `SCFA and alcohol conversions: acetate, pt 1` == TRUE & 
+                       `SCFA and alcohol conversions: acetate, pt 2` == TRUE) | #methyl branch WL pathway to produce acetate this gives 0
+                      (`Acetyl-CoA pathway, CO2 => acetyl-CoA` == 1 &
+                      `SCFA and alcohol conversions: acetate, pt 1` == TRUE & 
+                       `SCFA and alcohol conversions: acetate, pt 2` == TRUE) | #Carbonyl branch WL pathway to produce acetate this brings it up to 8
+                      (`SCFA and alcohol conversions: acetate, pt 1` == TRUE & `SCFA and alcohol conversions: acetate, pt 2` == TRUE) | #this brings it up to 102
+                      `Reductive acetyl-CoA pathway (Wood-Ljungdahl pathway)` >=0.85) %>% #this brings it back up to 476
+             filter(`Methanogenesis and methanotrophy: Key functional gene` == FALSE) %>% #remove methane cyclers, this would remove Acetobacteraceae as well
+             filter(`Methanogenesis and methanotrophy: methane => methanol, with oxygen (pmo)` == FALSE &
+                    `Methanogenesis and methanotrophy: methane => methanol, with oxygen (mmo)` == FALSE) #this brings it down to 456 observations
+                  
+#create a simplified data frame to look through manually
+acetogens_simplified <-  acetogens %>%
+                         select(c(Sample_site, genome, mean_coverage_bin, Family, 
+                                  `Reductive acetyl-CoA pathway (Wood-Ljungdahl pathway)`,
+                                  `Acetyl-CoA pathway, CO2 => acetyl-CoA`,
+                                  `SCFA and alcohol conversions: Alcohol production`:`SCFA and alcohol conversions: pyruvate => acetylCoA f+ formate v3`))
+
+#take a quick look at the distinct family names showing up
+acetogen_distinct <- acetogens %>% distinct(Family)
+#100 distinct family names showing up
+```
+  
+2. Create two data frames: 1) the percent_gathered that encompasses how complete metabolic pathways are and 2) the true_false_gathered that provides gene presence/absence data as shown in DRAM using the data set comprised of putative methanogenic MAGs.
+```{r}
+acetogens_percent_complete_gathered<-acetogens %>% 
+                                     gather(key = Pathway_name, value = Percent_complete, 
+                                            "3-Hydroxypropionate bi-cycle":"Complex V: V/A-type ATPase, prokaryotes", na.rm=FALSE) %>%
+                                     select(-c("CAZy: Alpha-galactans": "Sample_site")) %>% 
+                                     mutate(group = case_when(grepl("\\:.*", Pathway_name) ~ 
+                                     sub("\\:.*", "", Pathway_name),
+                                     !grepl("\\:.*", Pathway_name) ~ "Module")) %>% #maintained up to this step
+                                     mutate(Pathway_name = gsub("Complex I*:","",Pathway_name)) %>% #had to be more specific in filtering
+                                     mutate(Pathway_name = gsub("Complex IV*.*:","",Pathway_name)) %>%
+                                     mutate(Pathway_name = gsub("Complex V*.*:","",Pathway_name)) %>%
+                                     left_join(taxonomy_parsed, by = "genome") #re-add the taxonomic information here
+
+
+acetogens_true_false_gathered<- acetogens %>%
+                                gather(Pathway_name, Presence_absence,
+                                       "CAZy: Alpha-galactans":"Sulfur metabolism: thiosulfate => sulfite", na.rm = FALSE) %>%
+                                select(-c("3-Hydroxypropionate bi-cycle":"Complex V: V/A-type ATPase, prokaryotes")) %>%
+                                mutate(group = case_when(grepl("\\:.*", Pathway_name) ~ 
+                                     sub("\\:.*", "", Pathway_name))) %>%
+                                mutate(Pathway_name = gsub(".*:","",Pathway_name))
+```
+
+2. Re-define the order you want the variables to appear in for the quantitative and categorical data using the methanogen data frame. I have provided the names of facets output by DRAM with in-line comments denoted by #.
+```{r}
+#Quantitative data script
+acetogens_percent_complete_gathered$Pathway_name<-trimws(acetogens_percent_complete_gathered$Pathway_name, which = c("left")) 
+
+acetogens_percent_complete_gathered$Pathway_name = factor(acetogens_percent_complete_gathered$Pathway_name, 
+                                          levels =c(
+                                            
+                                          #Module facet
+                                            
+                                          "Glycolysis (Embden-Meyerhof pathway), glucose => pyruvate", 
+                                          "Pentose phosphate pathway (Pentose phosphate cycle)",
+                                          "Entner-Doudoroff pathway, glucose-6P => glyceraldehyde-3P + pyruvate",
+                                          "Citrate cycle (TCA cycle, Krebs cycle)",
+                                          "Glyoxylate cycle",
+                                          "Reductive pentose phosphate cycle (Calvin cycle)",
+                                          "Reductive citrate cycle (Arnon-Buchanan cycle)",
+                                          "Dicarboxylate-hydroxybutyrate cycle",
+                                          "Hydroxypropionate-hydroxybutylate cycle",
+                                          "3-Hydroxypropionate bi-cycle",
+                                          "Reductive acetyl-CoA pathway (Wood-Ljungdahl pathway)",
+                                          "Acetyl-CoA pathway, CO2 => acetyl-CoA",
+                                          "Methanogenesis, CO2 => methane",
+                                          
+                                          #Complex I
+                                          
+                                          "NADH:quinone oxidoreductase, prokaryotes",
+                                          "NAD(P)H:quinone oxidoreductase, chloroplasts and cyanobacteria",
+                                          "NADH dehydrogenase (ubiquinone) 1 alpha subcomplex",
+                                          
+                                          #Complex II
+                                          
+                                          "Succinate dehydrogenase (ubiquinone)",
+                                          "Succinate dehydrogenase, prokaryotes",
+                                          "Fumarate reductase, prokaryotes",
+                                          
+                                          #Complex III
+                                          
+                                          "Cytochrome bc1 complex respiratory unit", #what's the difference between first and second?
+                                          "Cytochrome bc1 complex",
+                                          "Cytochrome bd ubiquinol oxidase",
+                                          
+                                          #Complex IV high affinity
+                                          
+                                          #"Cytochrome bd ubiquinol oxidase", This level is being duplicated, but may not be an issue
+                                          "Cytochrome c oxidase, cbb3-type",
+                                          
+                                          #Complex IV low affinity
+                                          
+                                          "Cytochrome c oxidase",
+                                          "Cytochrome c oxidase, prokaryotes",
+                                          "Cytochrome aa3-600 menaquinol oxidase",
+                                          "Cytochrome o ubiquinol oxidase",
+                                          
+                                          #Complex V
+                                          "F-type ATPase, prokaryotes and chloroplasts",
+                                          "F-type ATPase, eukaryotes",
+                                          "V/A-type ATPase, prokaryotes",
+                                          "V-type ATPase, eukaryotes"
+                                          ))
+
+#Categorical data script
+acetogens_true_false_gathered$Pathway_name<-trimws(acetogens_true_false_gathered$Pathway_name, which = c("left")) 
+
+acetogens_true_false_gathered$Pathway_name = factor(acetogens_true_false_gathered$Pathway_name, 
+                                          levels =c(
+                                            
+                                          #CAZy facet
+                                            
+                                          "Polyphenolics", 
+                                          "Crystalline Cellulose",
+                                          "Amorphous Cellulose",
+                                          "Xyloglucan",
+                                          "Xylans",
+                                          "Alpha-mannan",
+                                          "Beta-mannan",
+                                          "Mixed-Linkage glucans",
+                                          "Starch",
+                                          "Pectin",
+                                          "Arabinan",
+                                          "Alpha-galactans",
+                                          "Beta-galactan (pectic galactan)",
+                                          "Chitin",
+                                          "Sulf-Polysachharides",
+                                          "Mucin",
+                                          "Fucose Cleavage",
+                                          "Arabinose cleavage",
+                                          "Rhamnose cleavage",
+                                          
+                                          #Nitrogen metabolism
+                                          
+                                          "ammonia => nitrite",
+                                          "Bacterial/Archaeal ammonia oxidation",
+                                          "Bacterial (aerobic-specific) ammonia oxidation",
+                                          "Bacterial (anaerobic-specific) ammonia oxidation",
+                                          "nitrite => nitrate",
+                                          "nitrate => nitrite",
+                                          "nitrite => nitric oxide",
+                                          "Dissimilatory nitrite reduction to ammonia (DNRA)",
+                                          "nitric oxide => nitrous oxide",
+                                          "nitrous oxide => nitrogen",
+                                          "nitrogen => ammonia",
+                                          "Nitrogen fixation altennative",
+                                          
+                                          #Sulfur metabolism
+                                          "dissimilatory sulfate reduction (and oxidation) sulfate => sulfide",
+                                          "thiosulfate => sulfite",
+                                          "Thiosulfate oxidation by SOX complex, thiosulfate => sulfate",
+                                          "tetrathionate => thiosulfate",
+                                          
+                                          #Other reductases
+                                          
+                                          "selenate/Chlorate reduction",
+                                          "TMAO reductase",
+                                          "mercury reduction",
+                                          "arsenate reduction, pt 1",
+                                          "arsenate reduction, pt 2",
+                                          
+                                          #Photosynthesis
+                                          "Photosystem I",
+                                          "Photosystem II",
+                                          
+                                          #Methanogenesis and methanotrophy
+                                          
+                                          "Key functional gene",
+                                          "acetate => methane, pt 1",
+                                          "acetate => methane, pt 2",
+                                          "acetate => methane, pt 3",
+                                          "methanol => methane",
+                                          "trimethylamine => dimethylamine",
+                                          "dimethylamine => monomethylamine",
+                                          "monomethylamine => ammonia",
+                                          "putative but not defining CO2 => methane",
+                                          "methane => methanol, with oxygen (pmo)",
+                                          "methane => methanol, with oxygen (mmo)",
+                                          
+                                          #SCFA and alcohol conversions
+                                          "pyruvate => acetyl CoA v1",
+                                          "pyruvate => acetyl CoA v2",
+                                          "pyruvate => acetylCoA f+ formate v3",
+                                          "acetate, pt 1",
+                                          "acetate, pt 2",
+                                          "acetate, pt 3",
+                                          "lactate L",
+                                          "lactate D",
+                                          "Butyrate, pt 1",
+                                          "Butyrate, pt 2",
+                                          "Propionate, pt 1",
+                                          "Propionate, pt 2",
+                                          "Alcohol production"
+                                          ))
+```
+
+3. Combine the *acetogens_percent_complete_gathered* and *acetogens_true_false_gathered* data frames to re-create DRAM's output, focusing on the most salient data for methanogenesis.
+```{r}
+library(tidyverse)
+library(ggtext)
+library(patchwork)
+library(glue)
+
+heatmap_theme<- theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+               panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.text.x = element_text(color = "black", size = 14),
+               axis.text.y = element_text(color = "black", size = 14),
+               axis.title.x = element_text(color = "black", size = 16, vjust = -3),
+               axis.title.y = element_text(color = "black", size = 16, vjust = 6),
+               legend.title=element_text(size=16), 
+               legend.text=element_text(size=14),
+               legend.key = element_rect(fill = "white", color = NA),
+               plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+               panel.border = element_rect(colour = "black", fill=NA, size=1),
+               plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+acetogens_percent_complete_gathered$Sample_site = factor(acetogens_percent_complete_gathered$Sample_site, 
+                                          levels =c("A", "B", "C", "D1", "D2", "E","F1", "F2","CSWMC")) #orders sites that will act as rows in facet
+
+
+acetogens_percent_complete_heatmap_pathways_refined<- acetogens_percent_complete_gathered %>%
+                    filter(!Sample_site == "CSWMC") %>%
+                    filter(Pathway_name == "Acetyl-CoA pathway, CO2 => acetyl-CoA" | 
+                           Pathway_name == "Reductive acetyl-CoA pathway (Wood-Ljungdahl pathway)" |
+                           Pathway_name == "Cytochrome bd ubiquinol oxidase" |
+                           Pathway_name == "Cytochrome c oxidase, cbb3-type" |
+                           Pathway_name == "Cytochrome aa3-600 menaquinol oxidase" |
+                           Pathway_name == "Cytochrome c oxidase" |
+                           Pathway_name == "Cytochrome c oxidase, prokaryotes" |
+                           Pathway_name == "Cytochrome o ubiquinol oxidase"
+                           ) %>%
+                     filter(!group == "Complex III") %>%
+                    #reformat the names so they are better for presentation purposes, making sure to start with order
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                     mutate(Class = str_replace(string = Class,
+                                            pattern = "\\*\\*",
+                                            replacement = Phylum)) %>%
+                          
+                          mutate(Order = str_replace(string = Order,
+                                            pattern = "\\*\\*",
+                                            replacement = Class)) %>%
+  
+                          mutate(Family = str_replace(string = Family,
+                                            pattern = "\\*\\*",
+                                            replacement = Order)) %>%
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    mutate(Phylum_family_bin = as.factor(Phylum_family_bin)) %>%
+                    mutate(Pathway_name = recode(Pathway_name, #recode to meaningful names
+                                                 'Acetyl-CoA pathway, CO2 => acetyl-CoA' = "CODH/ACS complex", 
+                                                 'Methanogenesis, CO2 => methane' = "Hydrogenotrophic methanogenesis")) %>%
+                    ggplot(aes(x=Pathway_name, y = reorder(Phylum_family_bin, relative_mean_coverage_bin), 
+                               fill=Percent_complete, na.rm = TRUE))+
+                    geom_tile(aes())+
+                    facet_grid(Sample_site ~ group, 
+                               scales = "free", space = "free", labeller = labeller(group = label_wrap_gen(10))) +
+                    theme(axis.text.x=element_text(angle=90, hjust=1)) +
+                    scale_fill_distiller(palette = "YlGnBu", trans = "reverse", limits = c(1,0))+
+                    labs(title = "", x = "", y = "", fill = "% complete") +
+                    heatmap_theme +
+                    theme(
+                          legend.position = c(0.4, 1.05), legend.direction = "vertical", #set legend position coordinates here
+                          legend.key.height= unit(4, 'cm'), legend.key.width = unit(2,"cm"),
+                          legend.text = element_text(size = 34),
+                          legend.title = element_text(size = 34),
+                          strip.background = element_blank(), 
+                          strip.text.y = element_blank(), 
+                          strip.text.x = element_blank(),
+                          axis.text.x = element_text(color = "black", size = 32),
+                          axis.text.y = element_markdown(size = 12, face = "bold"),
+                          plot.margin=margin(0,0,0,0)) +
+                    guides(guide_colorbar(reverse = TRUE))
+
+
+#recode the TRUE/FALSE data to presence absence
+acetogens_true_false_gathered<-acetogens_true_false_gathered %>% 
+                               mutate(Presence_absence = as.factor(Presence_absence)) %>%
+                               mutate(Presence_absence = recode(Presence_absence, 'TRUE' = "Present", 'FALSE' = "Absent"))
+
+#re-organize the order in which you want to present the landfill cells
+acetogens_true_false_gathered$Sample_site = factor(acetogens_true_false_gathered$Sample_site, 
+                                          levels =c("A", "B", "C", "D1", "D2", "E","F1", "F2","CSWMC")) #orders sites that will act as rows in facet
+
+#edit the group variable to present them in the proper order for methanogen-centric data
+acetogens_true_false_gathered$group = factor(acetogens_true_false_gathered$group, 
+                                          levels =c("Methanogenesis and methanotrophy", "CAZy", "SCFA and alcohol conversions", 
+                                                    "Nitrogen metabolism", "Sulfur metabolism", "Other Reductases","Photosynthesis")) #order facets
+
+acetogens_true_false_heatmap_pathways_refined<- acetogens_true_false_gathered %>%
+                    filter(!Sample_site == "CSWMC") %>%
+                    filter(#group == "Methanogenesis and methanotrophy" | 
+                           group == "SCFA and alcohol conversions" |
+                           group == "Complex IV High Affinity" |
+                           group == "Complex IV Low Affinity" |
+                           group == "Nitrogen metabolism" |
+                           group == "Sulfur metabolism") %>%
+                    #filter(!Pathway_name == "methane => methanol, with oxygen (mmo)" & 
+                           #!Pathway_name == "methane => methanol, with oxygen (pmo)" &
+                           #!Pathway_name == "putative but not defining CO2 => methane") %>% #remove non-pertinent data
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+  
+                     mutate(Class = str_replace(string = Class,
+                                            pattern = "\\*\\*",
+                                            replacement = Phylum)) %>%
+                          
+                          mutate(Order = str_replace(string = Order,
+                                            pattern = "\\*\\*",
+                                            replacement = Class)) %>%
+  
+                          mutate(Family = str_replace(string = Family,
+                                            pattern = "\\*\\*",
+                                            replacement = Order)) %>%
+  
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    mutate(Phylum_family_bin = as.factor(Phylum_family_bin)) %>%
+                    mutate(Pathway_name = recode(Pathway_name, 
+                                                 'Key functional gene' = "*mcrA* gene")) %>%
+                    ggplot(aes(x=Pathway_name, y = reorder(Phylum_family_bin, relative_mean_coverage_bin), fill=Presence_absence))+
+                    geom_tile(aes())+
+                    facet_grid(Sample_site ~ group, scales = "free", space = "free") +
+                    theme(axis.text.x=element_text(angle=90, hjust=1)) +
+                    scale_fill_manual(values = c("#CCFFFF", "#009933"))+ 
+                    labs(title = "", x = "", y = "", fill = "Function") +
+                    heatmap_theme +
+                    theme(plot.title = element_text(hjust = 0.7, vjust = -1), 
+                          legend.position = c(0.5, 1.05), legend.direction = "vertical", #set legend position coordinates here
+                          legend.key.height= unit(4, 'cm'), legend.key.width = unit(2,"cm"),
+                          legend.text = element_text(size = 34),
+                          legend.title = element_text(size = 34),
+                          strip.background = element_blank(), 
+                          strip.text.y = element_blank(), 
+                          strip.text.x = element_blank(),
+                          axis.text.x = element_markdown(size = 32, color = "black"),
+                          axis.text.y = element_blank(),
+                          axis.ticks.y = element_blank(),
+                          plot.margin=margin(0,0,0,0))
+
+acetogens_coverage_heatmap<- acetogens_true_false_gathered %>%
+                    filter(!Sample_site == "CSWMC") %>%
+                    distinct(genome, .keep_all = TRUE) %>% #need to add this or it will sum repeated coverage values
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "o__",
+                                                replacement = "")) %>%
+                    mutate(Order = str_replace(string = Order,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "f__",
+                                                replacement = "")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+                    mutate(Family = str_replace(string = Family,
+                                                pattern = "\\*\\*",
+                                                replacement = Order)) %>% #this is to replace any unknown families with their order name
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "p__",
+                                                replacement = "")) %>%
+                    mutate(Phylum = str_replace(string = Phylum,
+                                                pattern = "(.*)",
+                                                replacement = "*\\1*")) %>%
+  
+                     mutate(Class = str_replace(string = Class,
+                                            pattern = "\\*\\*",
+                                            replacement = Phylum)) %>%
+                          
+                          mutate(Order = str_replace(string = Order,
+                                            pattern = "\\*\\*",
+                                            replacement = Class)) %>%
+  
+                          mutate(Family = str_replace(string = Family,
+                                            pattern = "\\*\\*",
+                                            replacement = Order)) %>%
+  
+                    mutate(Phylum_family_bin = glue("{Phylum}, {Family} ({genome})")) %>%
+                    ggplot(aes(x = reorder(Phylum_family_bin, relative_mean_coverage_bin), y = relative_mean_coverage_bin)) +
+                    geom_bar(stat = "identity", aes(fill = relative_mean_coverage_bin)) + #add the width argument here
+                    facet_grid(rows = vars(Sample_site), scale = "free", space = 'free') +
+                    geom_hline(data = Coverage_summary_no_CSWMC, aes(yintercept= mean_coverage_site), size = 2) +
+                    geom_hline(data = Coverage_summary_no_CSWMC, aes(yintercept= median_coverage_site), linetype="dashed", size=2) +
+                    scale_fill_distiller(palette = "Reds", trans = "reverse")+
+                    scale_y_continuous(limits = c(0, 30)) + # max relative abundance in entire data set
+                    scale_x_discrete(position = "top") +
+                    coord_flip()+
+                    labs(title = "Relative abundance (%)", 
+                         x = "" , y = "") +
+                    heatmap_theme +
+                    theme(plot.title = element_text(hjust = 0.5, vjust = -1050, size = 30),
+                    legend.position = "none", panel.background = element_blank(), axis.line = element_line(colour = "black"),       
+                    axis.title.x  = element_blank(), 
+                    axis.text.x = element_text(color = "black", size = 32, vjust = -1),
+                    axis.text.y = element_blank(),
+                    axis.ticks.y = element_blank(),
+                    strip.text.y = element_text(size = 40),
+                    strip.text.x = element_text(size = 40))
+
+acetogens_coverage_heatmap
+
+#combine the heatmaps with the coverage data
+acetogens_combined_plot_pathways_refined<-acetogens_percent_complete_heatmap_pathways_refined + 
+                                            acetogens_true_false_heatmap_pathways_refined +
+                                            acetogens_coverage_heatmap +
+                                            plot_layout(ncol = 3, nrow = 1, widths = c(0.1, 0.4, 0.2), guides = "collect")
+
+ggsave("Acetogen_metabolism_and_relative_abundance_2023_07_12.pdf", height=100, width=50, device="pdf", limitsize = FALSE)
+```
+
+# 6. Additional resources
+Link to IMG summary document outlining different approaches to ordination: https://img.jgi.doe.gov/docs/Ordination.pdf
+
+This is some useful code to just show a generic example of how to run this type of analyses with a made up matrix: https://jonlefcheck.net/2012/10/24/nmds-tutorial-in-r/
+
+This workflow also gives you an example and then how to break it down in ggplot2 to actual variables of interest
+https://jkzorz.github.io/2019/06/06/NMDS.html
+
+Riffomonas youtube page demonstrating how to create distance matrices using the 'vegan' package: https://www.youtube.com/watch?v=xyufizOpc5I&ab_channel=RiffomonasProject
+
